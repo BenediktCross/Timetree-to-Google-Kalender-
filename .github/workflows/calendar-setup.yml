@@ -3,7 +3,7 @@ name: TimeTree Einrichtung prüfen
 on:
   push:
     branches: [main]
-    paths: [.github/workflows/calendar-setup.yml]
+    paths: [.github/workflows/calendar-setup.yml, sync.py]
 
 permissions:
   contents: read

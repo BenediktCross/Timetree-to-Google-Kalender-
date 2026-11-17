@@ -7,6 +7,7 @@ Full source + destination preflight precedes all writes; writes are not atomic.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import logging
@@ -292,6 +293,7 @@ def is_deleted(event):
 
 def normalize(events, c, namespace):
     desired, deleted, by_id = {}, set(), {}
+    format_errors = Counter()
     for event in events:
         if not isinstance(event, dict) or not event.get("id") or str(event.get("calendar_id")) != c["timetree_calendar_id"]:
             raise SyncError("TimeTree/Snapshot: fehlende ID oder falscher Kalender.")
@@ -325,50 +327,64 @@ def normalize(events, c, namespace):
                     or not any(isinstance(line, str) and line.startswith(("EXDATE:", "EXDATE;"))
                                for line in parent_lines)):
                 raise SyncError("TimeTree: verschobenes Serienvorkommen ohne eindeutig zuordenbare Serie mit EXDATE.")
-        if "all_day" not in event:
-            raise SyncError("TimeTree: all_day fehlt; Format zuerst prüfen.")
-        all_day = flag(event["all_day"], "TimeTree all_day")
-        all_day_zone = c.get("all_day_timezone", c["timezone"])
-        start_zone = all_day_zone if all_day else event.get("start_timezone") or c["timezone"]
-        end_zone = all_day_zone if all_day else event.get("end_timezone") or start_zone
-        tz = time_zone(start_zone, "TimeTree Startzeitzone")
-        end_tz = time_zone(end_zone, "TimeTree Endzeitzone")
-        start = timestamp(event.get("start_at"), tz)
-        end = timestamp(event.get("end_at"), end_tz)
-        start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
-        if end_utc < start_utc or (end_utc == start_utc and not all_day):
-            raise SyncError("TimeTree: Ende liegt vor/am Beginn eines zeitgebundenen Termins.")
-        for field in ("title", "note", "location"):
-            if event.get(field) is not None and not isinstance(event[field], str):
-                raise SyncError("TimeTree: unerwarteter Textfeld-Typ; keine Google-Änderung.")
-        if all_day:
-            sd, ed = start.date(), end.date()
-            if c["all_day_end_mode"] == "inclusive":
-                ed += timedelta(days=1)
-            elif end.time().replace(tzinfo=None) != datetime.min.time():
-                # End-of-day timestamps become Google's exclusive end date.
-                ed += timedelta(days=1)
-            if ed <= sd:
-                ed = sd + timedelta(days=1)
-            gs, ge = {"date": sd.isoformat()}, {"date": ed.isoformat()}
-        else:
-            gs = {"dateTime": start.isoformat(), "timeZone": start_zone}
-            ge = {"dateTime": end.isoformat(), "timeZone": end_zone}
-        lines = event.get("recurrences")
-        rules = recurrence([] if lines is None else lines, all_day, start, tz)
-        body = {
-            "summary": event.get("title") or "(Ohne Titel)",
-            "description": event.get("note") or "",
-            "location": event.get("location") or "",
-            "start": gs, "end": ge, "recurrence": rules,
-            "reminders": {"useDefault": False}, "status": "confirmed",
-            "extendedProperties": {"private": {
-                "ttOwner": OWNER, "ttNamespace": namespace,
-                "ttSource": c["timetree_calendar_id"], "ttKey": key,
-            }},
-        }
+        try:
+            body = event_body(event, c)
+        except SyncError as exc:
+            format_errors[str(exc)] += 1
+            continue
+        body["extendedProperties"] = {"private": {
+            "ttOwner": OWNER, "ttNamespace": namespace,
+            "ttSource": c["timetree_calendar_id"], "ttKey": key,
+        }}
         desired[key] = body
+    if format_errors:
+        messages = "; ".join(f"{count} × {message}" for message, count in format_errors.items())
+        raise SyncError(f"TimeTree: nicht importierbare Termine. {messages}")
     return desired, deleted
+
+
+def event_body(event, c):
+    if "all_day" not in event:
+        raise SyncError("TimeTree: all_day fehlt.")
+    all_day = flag(event["all_day"], "TimeTree all_day")
+    all_day_zone = c.get("all_day_timezone", c["timezone"])
+    start_zone = all_day_zone if all_day else event.get("start_timezone") or c["timezone"]
+    end_zone = all_day_zone if all_day else event.get("end_timezone") or start_zone
+    tz = time_zone(start_zone, "TimeTree Startzeitzone")
+    end_tz = time_zone(end_zone, "TimeTree Endzeitzone")
+    start = timestamp(event.get("start_at"), tz)
+    end = timestamp(event.get("end_at"), end_tz)
+    start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+    if end_utc < start_utc:
+        raise SyncError("TimeTree: Ende liegt vor Beginn.")
+    unspecified_end = not all_day and end_utc == start_utc
+    if unspecified_end:
+        end = (start_utc + timedelta(minutes=1)).astimezone(end_tz)
+    for field in ("title", "note", "location"):
+        if event.get(field) is not None and not isinstance(event[field], str):
+            raise SyncError("TimeTree: unerwarteter Textfeld-Typ.")
+    if all_day:
+        sd, ed = start.date(), end.date()
+        if c["all_day_end_mode"] == "inclusive" or end.time().replace(tzinfo=None) != datetime.min.time():
+            ed += timedelta(days=1)
+        if ed <= sd:
+            ed = sd + timedelta(days=1)
+        gs, ge = {"date": sd.isoformat()}, {"date": ed.isoformat()}
+    else:
+        gs = {"dateTime": start.isoformat(), "timeZone": start_zone}
+        ge = {"dateTime": end.isoformat(), "timeZone": end_zone}
+    lines = event.get("recurrences")
+    rules = recurrence([] if lines is None else lines, all_day, start, tz)
+    body = {
+        "summary": event.get("title") or "(Ohne Titel)",
+        "description": event.get("note") or "",
+        "location": event.get("location") or "",
+        "start": gs, "end": ge, "recurrence": rules,
+        "reminders": {"useDefault": False}, "status": "confirmed",
+    }
+    if unspecified_end:
+        body["endTimeUnspecified"] = True
+    return body
 
 
 def google_session(*, requires_user=False):
@@ -459,7 +475,10 @@ def same_content(old, new):
     for field in ("summary", "description", "location", "recurrence"):
         if (old.get(field) or ([] if field == "recurrence" else "")) != new[field]:
             return False
-    for field in ("start", "end"):
+    if bool(old.get("endTimeUnspecified")) != bool(new.get("endTimeUnspecified")):
+        return False
+    dates = ("start",) if new.get("endTimeUnspecified") else ("start", "end")
+    for field in dates:
         a, b = old.get(field, {}), new[field]
         if "date" in b:
             if a.get("date") != b["date"]:

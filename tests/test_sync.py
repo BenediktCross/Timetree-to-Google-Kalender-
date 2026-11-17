@@ -100,6 +100,18 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(body["start"]["dateTime"], start.isoformat())
         self.assertEqual(body["end"]["dateTime"], end.isoformat())
 
+    def test_same_start_and_end_is_synced_without_end_time(self):
+        start = event()["start_at"]
+        body = next(iter(desired(end_at=start).values()))
+        self.assertTrue(body["endTimeUnspecified"])
+        timedelta = datetime.fromisoformat(body["end"]["dateTime"]) - datetime.fromisoformat(body["start"]["dateTime"])
+        self.assertEqual(timedelta.total_seconds(), 60)
+        old = mirrored(body)
+        old["end"] = old["start"]
+        self.assertTrue(sync.same_content(old, body))
+        with self.assertRaisesRegex(sync.SyncError, "Ende liegt vor Beginn"):
+            desired(end_at=start - 1000)
+
     def test_google_may_omit_timezone_for_single_event(self):
         d = desired()
         old = mirrored(next(iter(d.values())))
