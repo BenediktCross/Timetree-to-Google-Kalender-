@@ -385,8 +385,8 @@ def event_body(event, c):
     start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
     if end_utc < start_utc:
         raise SyncError("TimeTree: Ende liegt vor Beginn.")
-    unspecified_end = not all_day and end_utc == start_utc
-    if unspecified_end:
+    if not all_day and end_utc == start_utc:
+        # Google requires a positive duration for timed events.
         end = (start_utc + timedelta(minutes=1)).astimezone(end_tz)
     for field in ("title", "note", "location"):
         if event.get(field) is not None and not isinstance(event[field], str):
@@ -403,18 +403,13 @@ def event_body(event, c):
         ge = {"dateTime": end.isoformat(), "timeZone": end_zone}
     lines = event.get("recurrences")
     rules = recurrence([] if lines is None else lines, all_day, start, tz)
-    body = {
+    return {
         "summary": event.get("title") or "(Ohne Titel)",
         "description": event.get("note") or "",
         "location": event.get("location") or "",
         "start": gs, "end": ge, "recurrence": rules,
         "reminders": {"useDefault": False}, "status": "confirmed",
     }
-    if unspecified_end:
-        body["endTimeUnspecified"] = True
-    return body
-
-
 def google_session(*, requires_user=False):
     raw = os.environ.get("GOOGLE_CREDENTIALS_JSON")
     if not raw:
@@ -483,8 +478,7 @@ class Google:
         except SyncError as exc:
             shape = "ganztägig" if "date" in body["start"] else "mit Uhrzeit"
             recurrence = "Serie" if body["recurrence"] else "Einzeltermin"
-            end = ", ohne bestimmte Endzeit" if body.get("endTimeUnspecified") else ""
-            raise SyncError(f"Anlegen fehlgeschlagen ({recurrence}, {shape}{end}). {exc}") from None
+            raise SyncError(f"Anlegen fehlgeschlagen ({recurrence}, {shape}). {exc}") from None
         if status == 409:
             try:
                 _, existing = self.call("GET", calendar, "/events/" + event["id"])
@@ -507,28 +501,34 @@ class Google:
                   headers={"If-Match": old["etag"]}, params={"sendUpdates": "none"}, allowed=(404, 410))
 
 
-def same_content(old, new):
+def content_differences(old, new):
     # Compare actual fields, not only a cached source fingerprint: user edits are corrected.
+    differences = set()
     for field in ("summary", "description", "location", "recurrence"):
         if (old.get(field) or ([] if field == "recurrence" else "")) != new[field]:
-            return False
-    if bool(old.get("endTimeUnspecified")) != bool(new.get("endTimeUnspecified")):
-        return False
-    dates = ("start",) if new.get("endTimeUnspecified") else ("start", "end")
-    for field in dates:
+            differences.add(field)
+    for field in ("start", "end"):
         a, b = old.get(field, {}), new[field]
         if "date" in b:
             if a.get("date") != b["date"]:
-                return False
+                differences.add(field)
         else:
             try:
                 if datetime.fromisoformat(a["dateTime"].replace("Z", "+00:00")) != datetime.fromisoformat(b["dateTime"]):
-                    return False
+                    differences.add(field)
                 if a.get("timeZone") != b["timeZone"] and (new["recurrence"] or a.get("timeZone")):
-                    return False
+                    differences.add(field + ".timeZone")
             except (KeyError, ValueError, TypeError):
-                return False
-    return old.get("reminders") == new["reminders"] and old.get("status", "confirmed") == "confirmed"
+                differences.add(field)
+    if old.get("reminders") != new["reminders"]:
+        differences.add("reminders")
+    if old.get("status", "confirmed") != "confirmed":
+        differences.add("status")
+    return differences
+
+
+def same_content(old, new):
+    return not content_differences(old, new)
 
 
 def managed_events(existing, c, namespace):
@@ -646,6 +646,11 @@ def main(argv=None):
         plans.append((target, *plan(c, cfg["namespace"], desired, deleted, existing[target])))
     counts = [sum(len(p[i]) for p in plans) for i in (1, 2, 3)]
     LOG.info("Plan: %d anlegen, %d aktualisieren, %d löschen. Modus: %s.", *counts, "APPLY" if args.apply else "DRY-RUN")
+    if counts[1]:
+        fields = Counter(field for _, _, updates, _ in plans for old, body in updates
+                         for field in content_differences(old, body))
+        LOG.info("Google: Abweichende Felder zur Aktualisierung: %s.",
+                 ", ".join(f"{field} ({count})" for field, count in sorted(fields.items())))
     if args.apply:
         # Upserts for every calendar succeed before any deletion begins.
         applied = 0
