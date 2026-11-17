@@ -320,13 +320,14 @@ def normalize(events, c, namespace):
         has_parent_id = parent_id not in (None, 0, "0", "")
         if has_parent_id or parent_uuid:
             parent = by_id.get(str(parent_id)) if has_parent_id else by_uuid.get(str(parent_uuid))
-            parent_lines = (parent or {}).get("recurrences")
-            if (parent is None or parent is event or is_deleted(parent)
-                    or (parent_uuid and parent.get("uuid") != parent_uuid)
-                    or event.get("recurrences") or not isinstance(parent_lines, list)
-                    or not any(isinstance(line, str) and line.startswith(("EXDATE:", "EXDATE;"))
-                               for line in parent_lines)):
-                raise SyncError("TimeTree: verschobenes Serienvorkommen ohne eindeutig zuordenbare Serie mit EXDATE.")
+            if parent is event or (parent and parent_uuid and parent.get("uuid") != parent_uuid):
+                raise SyncError("TimeTree: widersprüchlicher Bezug eines Serienvorkommens.")
+            if parent and not is_deleted(parent):
+                parent_lines = event_body(parent, c)["recurrence"]
+                has_exclusion = any(line.startswith(("EXDATE:", "EXDATE;")) for line in parent_lines)
+                if (event.get("recurrences") or
+                        not (has_exclusion or series_ends_before(parent, event, c, parent_lines))):
+                    raise SyncError("TimeTree: verschobenes Serienvorkommen ohne EXDATE und mit überlappender Hauptserie.")
         try:
             body = event_body(event, c)
         except SyncError as exc:
@@ -341,6 +342,23 @@ def normalize(events, c, namespace):
         messages = "; ".join(f"{count} × {message}" for message, count in format_errors.items())
         raise SyncError(f"TimeTree: nicht importierbare Termine. {messages}")
     return desired, deleted
+
+
+def series_ends_before(parent, child, c, rules):
+    # A surviving standalone occurrence can appear beyond the shortened master series.
+    if not rules or any(not line.startswith("RRULE:") or not re.search(r"(?:[:;])(?:COUNT|UNTIL)=", line)
+                        for line in rules):
+        return False
+    all_day = parent["all_day"]
+    name = (c.get("all_day_timezone", c["timezone"]) if all_day
+            else parent.get("start_timezone") or c["timezone"])
+    zone = time_zone(name, "TimeTree Serienzeitzone")
+    start = timestamp(parent.get("start_at"), zone)
+    cutoff = timestamp(child.get("start_at"), zone)
+    if all_day:
+        start = datetime.combine(start.date(), datetime.min.time())
+        cutoff = datetime.combine(cutoff.date(), datetime.min.time())
+    return all(rrulestr(line, dtstart=start).after(cutoff, inc=True) is None for line in rules)
 
 
 def event_body(event, c):

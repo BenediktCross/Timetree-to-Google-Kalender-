@@ -157,6 +157,13 @@ class ConversionTests(unittest.TestCase):
         with self.assertRaisesRegex(sync.SyncError, "EXDATE"):
             sync.normalize([master, moved], config(), "demo")
 
+    def test_detached_occurrence_after_shortened_series_or_without_master(self):
+        master = event(uuid="master", recurrences=["RRULE:FREQ=DAILY;COUNT=1"])
+        moved = event(id=2, parent_id=1, recurring_uuid="master",
+                      start_at=master["start_at"] + 86400000, end_at=master["end_at"] + 86400000)
+        self.assertEqual(len(sync.normalize([master, moved], config(), "demo")[0]), 2)
+        self.assertEqual(len(sync.normalize([moved], config(), "demo")[0]), 1)
+
     def test_missing_end_or_all_day_stops(self):
         with self.assertRaises(sync.SyncError):
             desired(end_at=None)
