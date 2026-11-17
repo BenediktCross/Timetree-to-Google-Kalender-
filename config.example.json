@@ -1,0 +1,16 @@
+{
+  "namespace": "my-timetree-bridge",
+  "calendars": [
+    {
+      "timetree_calendar_id": "12345678",
+      "google_calendar_id": "REPLACE@group.calendar.google.com",
+      "expected_google_calendar_name": "TimeTree – Familie",
+      "timezone": "Europe/Berlin",
+      "all_day_end_mode": "exclusive",
+      "full_snapshot_confirmed": false,
+      "allow_empty_source": false,
+      "max_deletions": 25,
+      "max_delete_fraction": 1.0
+    }
+  ]
+}

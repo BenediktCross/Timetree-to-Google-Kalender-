@@ -1,0 +1,17 @@
+{
+  "calendars": {
+    "12345678": [
+      {
+        "id": "demo-1",
+        "calendar_id": 12345678,
+        "title": "Demotermin – keine echten Kalenderdaten",
+        "note": "Ein erfundener Termin zum Offline-Test.",
+        "location": "",
+        "start_at": 1794988800000,
+        "end_at": 1794992400000,
+        "all_day": false,
+        "recurrences": []
+      }
+    ]
+  }
+}
