@@ -34,6 +34,13 @@ class SyncError(Exception):
     """Only sanitized, developer-controlled messages may be passed here."""
 
 
+class HttpSyncError(SyncError):
+    def __init__(self, message, status, reasons):
+        super().__init__(message)
+        self.status = status
+        self.reasons = reasons
+
+
 def canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
@@ -126,12 +133,17 @@ def request_json(session, method, url, *, label, allowed=(), **kwargs):
         if r.status_code in allowed:
             return r.status_code, {}
         retryable = r.status_code == 429 or r.status_code >= 500
-        if r.status_code == 403 and label == "Google":
+        reasons = set()
+        if r.status_code >= 400 and label == "Google":
             try:
                 reasons = {e.get("reason") for e in r.json().get("error", {}).get("errors", [])}
-                retryable = bool(reasons & {"rateLimitExceeded", "userRateLimitExceeded"})
+                reasons &= {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded", "notFound",
+                            "forbidden", "forbiddenForServiceAccounts", "invalid", "badRequest", "duplicate",
+                            "required", "insufficientPermissions", "timeRangeEmpty", "conditionNotMet"}
             except (ValueError, TypeError, AttributeError):
                 pass
+            if r.status_code == 403:
+                retryable = bool(reasons & {"rateLimitExceeded", "userRateLimitExceeded"})
         if retryable and attempt < 3:
             try:
                 delay = max(2 ** attempt, float(r.headers.get("Retry-After", 0)))
@@ -151,7 +163,10 @@ def request_json(session, method, url, *, label, allowed=(), **kwargs):
                 412: "Google-Termin wurde gleichzeitig geändert; nächsten Lauf abwarten.",
                 429: "Rate-Limit; nächsten Lauf abwarten.",
             }
-            raise SyncError(f"{label}: HTTP {r.status_code}. " + hints.get(r.status_code, "Abruf/Schreiben fehlgeschlagen; Schnittstelle prüfen."))
+            detail = f" ({', '.join(sorted(reasons))})" if reasons else ""
+            message = f"{label}: HTTP {r.status_code}{detail}. "
+            raise HttpSyncError(message + hints.get(r.status_code, "Abruf/Schreiben fehlgeschlagen; Schnittstelle prüfen."),
+                                r.status_code, reasons)
         if r.status_code == 204:
             return r.status_code, {}
         try:
@@ -462,10 +477,19 @@ class Google:
     def insert(self, calendar, body):
         # Fixed source key survives ephemeral runners, retried POSTs and lost responses.
         event = {**body, "id": "tt" + body["extendedProperties"]["private"]["ttKey"]}
-        status, _ = self.call("POST", calendar, "/events", json=event,
-                              params={"sendUpdates": "none"}, allowed=(409,))
+        try:
+            status, _ = self.call("POST", calendar, "/events", json=event,
+                                  params={"sendUpdates": "none"}, allowed=(409,))
+        except SyncError as exc:
+            shape = "ganztägig" if "date" in body["start"] else "mit Uhrzeit"
+            recurrence = "Serie" if body["recurrence"] else "Einzeltermin"
+            end = ", ohne bestimmte Endzeit" if body.get("endTimeUnspecified") else ""
+            raise SyncError(f"Anlegen fehlgeschlagen ({recurrence}, {shape}{end}). {exc}") from None
         if status == 409:
-            _, existing = self.call("GET", calendar, "/events/" + event["id"])
+            try:
+                _, existing = self.call("GET", calendar, "/events/" + event["id"])
+            except SyncError as exc:
+                raise SyncError(f"Erneutes Lesen nach ID-Konflikt fehlgeschlagen. {exc}") from None
             if existing.get("extendedProperties", {}).get("private") != body["extendedProperties"]["private"]:
                 if existing.get("status") == "cancelled":
                     raise SyncError("Google: gelöschte Termin-ID ohne Bridge-Markierung. Wiederherstellung laut Anleitung nötig.")
@@ -624,9 +648,13 @@ def main(argv=None):
     LOG.info("Plan: %d anlegen, %d aktualisieren, %d löschen. Modus: %s.", *counts, "APPLY" if args.apply else "DRY-RUN")
     if args.apply:
         # Upserts for every calendar succeed before any deletion begins.
+        applied = 0
         for target, inserts, updates, _ in plans:
             for body in inserts:
                 google.insert(target, body)
+                applied += 1
+                if applied % 100 == 0:
+                    LOG.info("Google: %d von %d neuen Terminen angelegt.", applied, counts[0])
             for old, body in updates:
                 google.update(target, old, body)
         for target, _, _, removals in plans:
