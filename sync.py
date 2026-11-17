@@ -294,6 +294,7 @@ def is_deleted(event):
 def normalize(events, c, namespace):
     desired, deleted, by_id = {}, set(), {}
     format_errors = Counter()
+    bounded_without_exclusion = 0
     for event in events:
         if not isinstance(event, dict) or not event.get("id") or str(event.get("calendar_id")) != c["timetree_calendar_id"]:
             raise SyncError("TimeTree/Snapshot: fehlende ID oder falscher Kalender.")
@@ -325,9 +326,13 @@ def normalize(events, c, namespace):
             if parent and not is_deleted(parent):
                 parent_lines = event_body(parent, c)["recurrence"]
                 has_exclusion = any(line.startswith(("EXDATE:", "EXDATE;")) for line in parent_lines)
-                if (event.get("recurrences") or
-                        not (has_exclusion or series_ends_before(parent, event, c, parent_lines))):
-                    raise SyncError("TimeTree: verschobenes Serienvorkommen ohne EXDATE und mit überlappender Hauptserie.")
+                bounded = bool(parent_lines) and all(
+                    line.startswith("RRULE:") and re.search(r"(?:[:;])(?:COUNT|UNTIL)=", line)
+                    for line in parent_lines)
+                if event.get("recurrences") or not (has_exclusion or bounded):
+                    raise SyncError("TimeTree: verschobenes Serienvorkommen ohne EXDATE und ohne begrenzte Hauptserie.")
+                if not has_exclusion:
+                    bounded_without_exclusion += 1
         try:
             body = event_body(event, c)
         except SyncError as exc:
@@ -341,24 +346,10 @@ def normalize(events, c, namespace):
     if format_errors:
         messages = "; ".join(f"{count} × {message}" for message, count in format_errors.items())
         raise SyncError(f"TimeTree: nicht importierbare Termine. {messages}")
+    if bounded_without_exclusion:
+        LOG.warning("TimeTree: %d Einzelvorkommen aus begrenzten Serien ohne EXDATE. Die gelieferten Serienregeln bleiben erhalten.",
+                    bounded_without_exclusion)
     return desired, deleted
-
-
-def series_ends_before(parent, child, c, rules):
-    # A surviving standalone occurrence can appear beyond the shortened master series.
-    if not rules or any(not line.startswith("RRULE:") or not re.search(r"(?:[:;])(?:COUNT|UNTIL)=", line)
-                        for line in rules):
-        return False
-    all_day = parent["all_day"]
-    name = (c.get("all_day_timezone", c["timezone"]) if all_day
-            else parent.get("start_timezone") or c["timezone"])
-    zone = time_zone(name, "TimeTree Serienzeitzone")
-    start = timestamp(parent.get("start_at"), zone)
-    cutoff = timestamp(child.get("start_at"), zone)
-    if all_day:
-        start = datetime.combine(start.date(), datetime.min.time())
-        cutoff = datetime.combine(cutoff.date(), datetime.min.time())
-    return all(rrulestr(line, dtstart=start).after(cutoff, inc=True) is None for line in rules)
 
 
 def event_body(event, c):

@@ -32,4 +32,26 @@ jobs:
           TIMETREE_SESSION_ID: ${{ secrets.TIMETREE_SESSION_ID }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SYNC_CONFIG_JSON: ${{ secrets.SYNC_CONFIG_JSON }}
-        run: python sync.py
+        run: |
+          python sync.py
+          python - <<'PY'
+          import os, time
+          import requests
+          from sync import load_config, request_json, is_deleted, SyncError
+          with requests.Session() as session:
+              for c in load_config('config.json')['calendars']:
+                  cid = c['timetree_calendar_id']
+                  endpoint = f'https://timetreeapp.com/api/v1/calendar/{cid}/events'
+                  try:
+                      _, data = request_json(session, 'GET', endpoint, label='TimeTree',
+                                            params={'since': int((time.time() - 90*86400)*1000)},
+                                            headers={'x-timetreea':'web/2.1.0/ja','Accept':'application/json'},
+                                            cookies={'_session_id':os.environ['TIMETREE_SESSION_ID']})
+                      events = data.get('events')
+                      if isinstance(events, list):
+                          print('DELTA_CHECK', len(events), sum(is_deleted(e) for e in events), type(data.get('chunk')).__name__, bool(data.get('chunk')), type(data.get('since')).__name__)
+                      else:
+                          print('DELTA_CHECK missing event list')
+                  except SyncError as exc:
+                      print('DELTA_CHECK', str(exc))
+          PY
