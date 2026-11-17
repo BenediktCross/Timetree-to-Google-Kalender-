@@ -1,4 +1,4 @@
-name: TimeTree erstmals abgleichen
+name: TimeTree Serienregeln prüfen
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 4
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -34,18 +34,45 @@ jobs:
           SYNC_CONFIG_JSON: ${{ secrets.SYNC_CONFIG_JSON }}
         run: |
           python - <<'PY'
-          import os, time
+          import os, re
+          from collections import Counter
           import requests
-          from sync import fetch_source, is_deleted, load_config, SyncError
+          from sync import fetch_source, load_config, normalize, Google, google_session, plan
+          cfg = load_config('config.json')
+          changes = Counter()
+          def shape(line):
+              head, _, val = line.partition(':')
+              content = head.split(';')[0]
+              props = tuple(sorted(p.split('=')[0] for p in head.split(';')[1:]))
+              if content == 'RRULE':
+                  keys = tuple(sorted(p.split('=')[0] for p in val.split(';')))
+              else:
+                  keys = tuple(sorted(set('date' if re.fullmatch(r'\d{8}', p) else 'utc' if p.endswith('Z') else 'local' for p in val.split(','))))
+              return (content, props, keys)
+          def details(before, after):
+              def parse(rule):
+                  _, _, value = rule.partition(':')
+                  return dict(s.split('=',1) for s in value.split(';'))
+              before_rule = [parse(s) for s in before if s.startswith('RRULE:')]
+              after_rule = [parse(s) for s in after if s.startswith('RRULE:')]
+              different_keys = []
+              for left, right in zip(before_rule, after_rule):
+                  for key in left.keys() | right.keys():
+                      vals = (left.get(key), right.get(key))
+                      if vals[0] == vals[1]: continue
+                      derived = tuple('absent' if v is None else 'default' if ((key == 'INTERVAL' and v == '1') or (key == 'WKST' and v == 'MO')) else 'date' if key == 'UNTIL' and len(v) == 8 else 'utc' if key == 'UNTIL' and v.endswith('Z') else 'other' for v in vals)
+                      different_keys.append((key, derived))
+              return tuple(sorted(different_keys))
           with requests.Session() as session:
-              for cfg in load_config('config.json')['calendars']:
-                  try:
-                      records = fetch_source(session, cfg['timetree_calendar_id'], os.environ['TIMETREE_SESSION_ID'],
-                                             changes_since=int((time.time() - 90*86400)*1000))
-                      print('Löschprüfung TimeTree:', sum(is_deleted(e) for e in records), 'gemeldete Löschungen im Änderungsabruf.')
-                  except SyncError as exc:
-                      print('Löschprüfung TimeTree:', str(exc))
+              for c in cfg['calendars']:
+                  desired, deleted = normalize(fetch_source(session, c['timetree_calendar_id'], os.environ['TIMETREE_SESSION_ID']), c, cfg['namespace'])
+                  g = Google(google_session(requires_user=c['google_target_type']=='dedicated_primary'))
+                  previous = g.preflight(c['google_calendar_id'], c['expected_google_calendar_name'], dedicated_primary=c['google_target_type']=='dedicated_primary')
+                  _, updates, _ = plan(c, cfg['namespace'], desired, deleted, previous)
+                  for current, target in updates:
+                      before, after = current.get('recurrence') or [], target.get('recurrence') or []
+                      if before != after:
+                          changes[(tuple(map(shape,before)), tuple(map(shape,after)), details(before,after), len(before)==len(after) and set(before)==set(after), 'date' in target['start'])] += 1
+          for signature, count in changes.items():
+              print('RRULE_SHAPE', count, signature)
           PY
-          python sync.py
-          python sync.py --apply
-          python sync.py
