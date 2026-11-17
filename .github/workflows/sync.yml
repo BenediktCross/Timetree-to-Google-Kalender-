@@ -46,6 +46,7 @@ jobs:
       - name: Kalender abgleichen
         env:
           TIMETREE_SESSION_ID: ${{ secrets.TIMETREE_SESSION_ID }}
+          TIMETREE_PEOPLE_BY_COLOR: ${{ secrets.TIMETREE_PEOPLE_BY_COLOR }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SYNC_CONFIG_JSON: ${{ secrets.SYNC_CONFIG_JSON }}
           MODE: ${{ inputs.mode }}

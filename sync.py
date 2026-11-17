@@ -28,6 +28,18 @@ LOG = logging.getLogger("sync")
 OWNER = "timetree-github-v1"
 SCOPES = ["https://www.googleapis.com/auth/calendar.events",
           "https://www.googleapis.com/auth/calendar.readonly"]
+TIMETREE_COLORS = {
+    "emerald green": 1,
+    "modern cyan": 2,
+    "deep sky blue": 3,
+    "pastel brown": 4,
+    "midnight black": 5,
+    "apple red": 6,
+    "french rose": 7,
+    "coral pink": 8,
+    "bright orange": 9,
+    "soft violet": 10,
+}
 
 
 class SyncError(Exception):
@@ -179,17 +191,61 @@ def request_json(session, method, url, *, label, allowed=(), **kwargs):
     raise SyncError(f"{label}: Wiederholungen ausgeschöpft.")
 
 
+def timetree_get(session, source, cookie, endpoint, **kwargs):
+    _, data = request_json(
+        session, "GET", f"https://timetreeapp.com/api/v1/calendar/{source}/{endpoint}",
+        label="TimeTree", headers={"x-timetreea": "web/2.1.0/ja", "Accept": "application/json"},
+        cookies={"_session_id": cookie}, **kwargs)
+    return data
+
+
+def load_people_by_color():
+    raw = os.environ.get("TIMETREE_PEOPLE_BY_COLOR")
+    if not raw:
+        return {}
+    mapping = read_json(raw, "TIMETREE_PEOPLE_BY_COLOR")
+    if not isinstance(mapping, dict):
+        raise SyncError("TIMETREE_PEOPLE_BY_COLOR: JSON-Objekt mit Farben und Personen erwartet.")
+    people = {}
+    for color, person in mapping.items():
+        color_id = TIMETREE_COLORS.get(color.strip().casefold())
+        if color_id is None or color_id in people or not isinstance(person, str) or not person.strip():
+            raise SyncError("TIMETREE_PEOPLE_BY_COLOR: ungültige oder doppelte Farbe bzw. fehlende Person.")
+        people[color_id] = person.strip()
+    return people
+
+
+def fetch_people_by_label(session, source, cookie, people_by_color):
+    labels = timetree_get(session, source, cookie, "labels").get("calendar_labels")
+    if not isinstance(labels, list) or not labels or any(
+        not isinstance(label, dict) or type(label.get("id")) is not int
+        or any(label.get(field) is not None and type(label[field]) is not int
+               for field in ("color", "default_color"))
+        for label in labels
+    ):
+        raise SyncError("TimeTree: unerwartetes Format der Farblabel. Keine Google-Änderung.")
+
+    default_colors = {label["default_color"]: label["id"] for label in labels
+                      if label.get("default_color") is not None and label["id"] in TIMETREE_COLORS.values()}
+    people = {}
+    for label in labels:
+        label_id = label["id"]
+        color = label.get("color")
+        if color is None:
+            color = label.get("default_color")
+        palette_id = label_id if color is None else default_colors.get(color, color)
+        if palette_id in people_by_color:
+            people[label_id] = people_by_color[palette_id]
+    return people
+
+
 def fetch_source(session, source, cookie, *, changes_since=None):
     """Page through the initial snapshot or the timestamp-based change feed."""
     cursor = 0 if changes_since is None else changes_since
     endpoint = "events/sync" if changes_since is None else "events"
     seen, events = {str(cursor)}, {}
     for page in range(1000):
-        _, data = request_json(
-            session, "GET", f"https://timetreeapp.com/api/v1/calendar/{source}/{endpoint}",
-            label="TimeTree", params={"since": cursor},
-            headers={"x-timetreea": "web/2.1.0/ja", "Accept": "application/json"},
-            cookies={"_session_id": cookie})
+        data = timetree_get(session, source, cookie, endpoint, params={"since": cursor})
         if not isinstance(data.get("events"), list) or type(data.get("chunk")) is not bool:
             raise SyncError("TimeTree: events-Liste oder boolesches chunk fehlt. Keine Google-Änderung.")
         for event in data["events"]:
@@ -310,7 +366,7 @@ def is_deleted(event):
     return deleted is True
 
 
-def normalize(events, c, namespace):
+def normalize(events, c, namespace, people_by_label=None):
     desired, deleted, by_id = {}, set(), {}
     format_errors = Counter()
     bounded_without_exclusion = 0
@@ -357,6 +413,11 @@ def normalize(events, c, namespace):
         except SyncError as exc:
             format_errors[str(exc)] += 1
             continue
+        label_id = event.get("label_id")
+        if people_by_label and type(label_id) is int and label_id in people_by_label:
+            person = people_by_label[label_id]
+            note = body["description"]
+            body["description"] = f"{person}\n\n{note}" if note else person
         body["extendedProperties"] = {"private": {
             "ttOwner": OWNER, "ttNamespace": namespace,
             "ttSource": c["timetree_calendar_id"], "ttKey": key,
@@ -635,6 +696,7 @@ def main(argv=None):
     if args.probe and args.apply:
         raise SyncError("--probe und --apply schließen sich aus.")
     cfg = load_config(args.config)
+    people_by_color = load_people_by_color()
     snapshots = None
     if args.snapshot:
         try:
@@ -651,13 +713,16 @@ def main(argv=None):
     with requests.Session() as session:
         for index, c in enumerate(cfg["calendars"], 1):
             LOG.info("Quelle %d/%d: Abruf und Formatprüfung.", index, len(cfg["calendars"]))
+            people_by_label = people_by_color
             if snapshots is None:
                 events = fetch_source(session, c["timetree_calendar_id"], cookie)
+                if people_by_color:
+                    people_by_label = fetch_people_by_label(session, c["timetree_calendar_id"], cookie, people_by_color)
             else:
                 events = snapshots.get(c["timetree_calendar_id"])
                 if not isinstance(events, list):
                     raise SyncError("Snapshot enthält nicht alle konfigurierten Kalender.")
-            desired, deleted = normalize(events, c, cfg["namespace"])
+            desired, deleted = normalize(events, c, cfg["namespace"], people_by_label)
             LOG.info("Quelle %d: %d Termine/Serien, %d Löschdatensätze.", index, len(desired), len(deleted))
             sources.append((c, desired, deleted))
     if args.probe:

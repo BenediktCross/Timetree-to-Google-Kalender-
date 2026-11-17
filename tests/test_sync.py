@@ -43,6 +43,21 @@ def response(data, status=200):
 
 
 class ConversionTests(unittest.TestCase):
+    def test_description_tracks_color_and_keeps_source_note(self):
+        people = {3: "Testperson", 5: "Neutrales Event"}
+        note = "Erste Zeile\nZweite Zeile"
+        first = sync.normalize([event(label_id=3, note=note)], config(), "demo", people)[0]
+        old = mirrored(next(iter(first.values())))
+        self.assertEqual(old["description"], f"Testperson\n\n{note}")
+        self.assertEqual(sync.plan(config(), "demo", first, set(), [old]), ([], [], []))
+
+        for label_id, expected in ((5, f"Neutrales Event\n\n{note}"), (2, note), (None, note)):
+            with self.subTest(label_id=label_id):
+                new = sync.normalize([event(label_id=label_id, note=note)], config(), "demo", people)[0]
+                inserts, updates, removals = sync.plan(config(), "demo", new, set(), [old])
+                self.assertEqual((len(inserts), len(updates), len(removals)), (0, 1, 0))
+                self.assertEqual(updates[0][1]["description"], expected)
+
     def test_stable_key_and_update(self):
         a, b = desired(), desired(title="Geändert", start_at=1794992400000, end_at=1794996000000)
         self.assertEqual(list(a), list(b))
@@ -253,6 +268,18 @@ class PlanningTests(unittest.TestCase):
 
 
 class NetworkTests(unittest.TestCase):
+    def test_color_follows_recolored_label(self):
+        session = Mock()
+        session.request.return_value = response({"calendar_labels": [
+            {"id": 3, "color": 501, "default_color": 301},
+            {"id": 5, "color": 301, "default_color": 501},
+            {"id": 6, "color": 900, "default_color": 601},
+        ]})
+        people = sync.fetch_people_by_label(session, "12345678", "example",
+                                           {3: "Testperson", 5: "Neutrales Event", 6: "Andere Person"})
+        self.assertEqual(people, {3: "Neutrales Event", 5: "Testperson"})
+        self.assertTrue(session.request.call_args.args[1].endswith("/calendar/12345678/labels"))
+
     def test_all_chunks_and_latest_version(self):
         session = Mock()
         session.request.side_effect = [response({"events": [event()], "chunk": True, "since": 55}),
