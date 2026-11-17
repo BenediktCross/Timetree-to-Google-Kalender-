@@ -200,6 +200,23 @@ class PlanningTests(unittest.TestCase):
         with self.assertRaisesRegex(sync.SyncError, "deactivated_at"):
             desired(c, deactivated_at="invalid")
 
+    @patch("sync.fetch_source")
+    def test_only_missing_managed_events_are_removed_by_confirmed_changes(self, fetch):
+        c = config(full_snapshot_confirmed=False)
+        d = desired(id=2)
+        missing = mirrored(next(iter(desired(id=1).values())))
+        missing["created"] = "2026-11-22T00:00:00Z"
+        active = mirrored(next(iter(d.values())))
+        fetch.return_value = [{"id": 1, "deactivated_at": 1795500000000},
+                              {"id": 2, "deactivated_at": 1795500000000},
+                              {"id": 3, "deactivated_at": 1795500000000}]
+        deleted = sync.confirm_deletions([missing, active], d, set(), c, "demo", "example")
+        self.assertEqual(fetch.call_args.kwargs["changes_since"], 1795219200000)
+        self.assertEqual(sync.plan(c, "demo", d, deleted, [missing, active]), ([], [], [missing]))
+        fetch.reset_mock()
+        sync.confirm_deletions([active], d, set(), c, "demo", "example")
+        fetch.assert_not_called()
+
     def test_empty_response_guard(self):
         old = mirrored(next(iter(desired().values())))
         with self.assertRaises(sync.SyncError):
@@ -233,6 +250,14 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(sync.fetch_source(session, "12345678", "SECRET")[0]["title"], "latest")
         self.assertEqual(session.request.call_args_list[0].kwargs["params"], {"since": 0})
         self.assertEqual(session.request.call_args_list[1].kwargs["params"], {"since": 55})
+
+    def test_changes_endpoint_accepts_scoped_tombstone_without_calendar_id(self):
+        session = Mock()
+        tombstone = {"id": 1, "deactivated_at": 1795500000000}
+        session.request.return_value = response({"events": [tombstone], "chunk": False})
+        self.assertEqual(sync.fetch_source(session, "12345678", "example", changes_since=123), [tombstone])
+        self.assertTrue(session.request.call_args.args[1].endswith("/calendar/12345678/events"))
+        self.assertEqual(session.request.call_args.kwargs["params"], {"since": 123})
 
     def test_stalled_cursor_fails(self):
         session = Mock()

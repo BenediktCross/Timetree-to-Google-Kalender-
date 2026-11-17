@@ -164,12 +164,14 @@ def request_json(session, method, url, *, label, allowed=(), **kwargs):
     raise SyncError(f"{label}: Wiederholungen ausgeschöpft.")
 
 
-def fetch_source(session, source, cookie):
-    """Upstream protocol: since=0, then all chunks; no persisted cursors."""
-    cursor, seen, events = 0, {"0"}, {}
+def fetch_source(session, source, cookie, *, changes_since=None):
+    """Page through the initial snapshot or the timestamp-based change feed."""
+    cursor = 0 if changes_since is None else changes_since
+    endpoint = "events/sync" if changes_since is None else "events"
+    seen, events = {str(cursor)}, {}
     for page in range(1000):
         _, data = request_json(
-            session, "GET", f"https://timetreeapp.com/api/v1/calendar/{source}/events/sync",
+            session, "GET", f"https://timetreeapp.com/api/v1/calendar/{source}/{endpoint}",
             label="TimeTree", params={"since": cursor},
             headers={"x-timetreea": "web/2.1.0/ja", "Accept": "application/json"},
             cookies={"_session_id": cookie})
@@ -178,7 +180,9 @@ def fetch_source(session, source, cookie):
         for event in data["events"]:
             if not isinstance(event, dict) or not event.get("id"):
                 raise SyncError("TimeTree: Termin ohne gültige ID. Keine Google-Änderung.")
-            if str(event.get("calendar_id")) != source:
+            source_id = event.get("calendar_id")
+            scoped_tombstone = changes_since is not None and source_id is None and is_deleted(event)
+            if str(source_id) != source and not scoped_tombstone:
                 raise SyncError("TimeTree: unerwartete Kalenderzuordnung. Keine Google-Änderung.")
             events[str(event["id"])] = event
         if data["chunk"] is False:
@@ -503,7 +507,7 @@ def same_content(old, new):
     return old.get("reminders") == new["reminders"] and old.get("status", "confirmed") == "confirmed"
 
 
-def plan(c, namespace, desired, deleted, existing):
+def managed_events(existing, c, namespace):
     owned = {}
     for event in existing:
         p = event.get("extendedProperties", {}).get("private", {})
@@ -511,6 +515,39 @@ def plan(c, namespace, desired, deleted, existing):
             if not re.fullmatch(r"[a-f0-9]{64}", p.get("ttKey", "")) or not event.get("id") or not event.get("etag"):
                 raise SyncError("Google: verwalteter Termin ohne gültigen Schlüssel/ETag. Keine Änderung.")
             owned.setdefault(p["ttKey"], []).append(event)
+    return owned
+
+
+def confirm_deletions(existing, desired, deleted, c, namespace, cookie):
+    owned = managed_events(existing, c, namespace)
+    missing = owned.keys() - desired.keys() - deleted
+    if not missing:
+        return set()
+    # A mirrored event could only disappear after it was first copied.
+    # Query from the oldest relevant creation date, with a margin for clock drift.
+    try:
+        dates = [datetime.fromisoformat(event["created"]) for key in missing for event in owned[key]]
+        if any(date.tzinfo is None for date in dates):
+            raise ValueError()
+        since = max(0, int((min(dates) - timedelta(days=1)).timestamp() * 1000))
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        since = 0
+    source = c["timetree_calendar_id"]
+    try:
+        with requests.Session() as session:
+            changes = fetch_source(session, source, cookie, changes_since=since)
+        confirmed = {digest([namespace, source, str(event["id"])])
+                     for event in changes if is_deleted(event)} & missing
+    except SyncError as exc:
+        LOG.warning("TimeTree: Änderungsabruf für Löschbestätigung fehlgeschlagen. %s", exc)
+        return set()
+    LOG.info("TimeTree: %d von %d fehlenden Spiegelterminen per Änderungsabruf als gelöscht bestätigt.",
+             len(confirmed), len(missing))
+    return confirmed
+
+
+def plan(c, namespace, desired, deleted, existing):
+    owned = managed_events(existing, c, namespace)
     inserts, updates, removals = [], [], []
     for key, body in desired.items():
         expected_id = "tt" + key
@@ -529,8 +566,8 @@ def plan(c, namespace, desired, deleted, existing):
         raise SyncError("Löschschutz: geplante Löschungen überschreiten max_deletions/max_delete_fraction. Dry-Run prüfen und Grenzwerte gezielt anpassen.")
     if not desired and not deleted and owned and not c["allow_empty_source"]:
         raise SyncError("TimeTree ist leer, Google enthält Spiegeltermine. allow_empty_source ist false; Sitzung und tatsächliche Leerung manuell prüfen.")
-    if not c["full_snapshot_confirmed"]:
-        LOG.warning("Vollständigkeit unbestätigt: Löschung durch bloßes Fehlen ist deaktiviert; explizite Löschdatensätze werden berücksichtigt.")
+    if not c["full_snapshot_confirmed"] and owned.keys() - desired.keys() - deleted:
+        LOG.warning("Für fehlende Spiegeltermine ohne Löschbestätigung bleiben die Google-Kopien erhalten.")
     return inserts, updates, removals
 
 
@@ -580,6 +617,8 @@ def main(argv=None):
         if target not in existing:
             existing[target] = google.preflight(target, c["expected_google_calendar_name"],
                                                 dedicated_primary=c["google_target_type"] == "dedicated_primary")
+        if snapshots is None and not c["full_snapshot_confirmed"]:
+            deleted |= confirm_deletions(existing[target], desired, deleted, c, cfg["namespace"], cookie)
         plans.append((target, *plan(c, cfg["namespace"], desired, deleted, existing[target])))
     counts = [sum(len(p[i]) for p in plans) for i in (1, 2, 3)]
     LOG.info("Plan: %d anlegen, %d aktualisieren, %d löschen. Modus: %s.", *counts, "APPLY" if args.apply else "DRY-RUN")

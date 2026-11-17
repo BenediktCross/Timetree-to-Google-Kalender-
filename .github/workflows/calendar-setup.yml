@@ -1,4 +1,4 @@
-name: TimeTree Einrichtung prüfen
+name: TimeTree erstmals abgleichen
 
 on:
   push:
@@ -15,7 +15,7 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-24.04
-    timeout-minutes: 4
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -34,35 +34,18 @@ jobs:
           SYNC_CONFIG_JSON: ${{ secrets.SYNC_CONFIG_JSON }}
         run: |
           python - <<'PY'
-          import hashlib, os, time
+          import os, time
           import requests
-          from sync import Google, google_session, load_config, request_json, is_deleted, SyncError
-          cfg = load_config('config.json')
+          from sync import fetch_source, is_deleted, load_config, SyncError
           with requests.Session() as session:
-              for c in cfg['calendars']:
-                  match = hashlib.sha256(("timetree-target-check-799c7065033f" + c['google_calendar_id']).encode()).hexdigest() == "54272e749e296232ede2f2dcc8271f36cd26faf7aeb062cf49ded1704233cf84"
-                  print('TARGET_ID_MATCH', match)
-                  print('TARGET_NAME_MATCH', c['expected_google_calendar_name'] == 'TimeTree')
-                  print('ABSENCE_DELETIONS_ENABLED', c['full_snapshot_confirmed'])
-                  cid = c['timetree_calendar_id']
-                  delta = f'https://timetreeapp.com/api/v1/calendar/{cid}/events'
+              for cfg in load_config('config.json')['calendars']:
                   try:
-                      _, data = request_json(session, 'GET', delta, label='TimeTree',
-                                            params={'since': int((time.time() - 90*86400)*1000)},
-                                            headers={'x-timetreea':'web/2.1.0/ja','Accept':'application/json'},
-                                            cookies={'_session_id':os.environ['TIMETREE_SESSION_ID']})
-                      events = data.get('events')
-                      if isinstance(events, list):
-                          print('DELTA_CHECK', len(events), sum(is_deleted(e) for e in events), type(data.get('chunk')).__name__, bool(data.get('chunk')), type(data.get('since')).__name__)
-                      else:
-                          print('DELTA_CHECK missing event list')
+                      records = fetch_source(session, cfg['timetree_calendar_id'], os.environ['TIMETREE_SESSION_ID'],
+                                             changes_since=int((time.time() - 90*86400)*1000))
+                      print('Löschprüfung TimeTree:', sum(is_deleted(e) for e in records), 'gemeldete Löschungen im Änderungsabruf.')
                   except SyncError as exc:
-                      print('DELTA_CHECK', str(exc))
-                  google = Google(google_session())
-                  try:
-                      entries = google.preflight(c['google_calendar_id'], c['expected_google_calendar_name'])
-                      print('GOOGLE_PREFLIGHT_OK', len(entries))
-                  except SyncError as exc:
-                      print('GOOGLE_PREFLIGHT_ERROR', str(exc))
-                      raise SystemExit(1)
+                      print('Löschprüfung TimeTree:', str(exc))
           PY
+          python sync.py
+          python sync.py --apply
+          python sync.py
