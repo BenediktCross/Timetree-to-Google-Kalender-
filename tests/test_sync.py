@@ -82,6 +82,31 @@ class ConversionTests(unittest.TestCase):
         b = next(iter(d.values()))
         self.assertEqual(b["end"]["date"], "2026-11-19")
 
+    def test_all_day_utc_dates_and_exceptions_independent_of_calendar_zone(self):
+        c = config(timezone="America/New_York", all_day_timezone="UTC", all_day_end_mode="inclusive")
+        body = next(iter(desired(c, all_day=True,
+                                 start_at=1794873600000, end_at=1794960000000,
+                                 recurrences=["RRULE:FREQ=WEEKLY", "EXDATE:20261124T000000Z"]).values()))
+        self.assertEqual(body["start"]["date"], "2026-11-17")
+        self.assertEqual(body["end"]["date"], "2026-11-19")
+        self.assertEqual(body["recurrence"][1], "EXDATE;VALUE=DATE:20261124")
+
+    def test_timed_event_uses_source_timezones_across_dst_fold(self):
+        start = datetime.fromisoformat("2026-10-25T02:30:00+02:00")
+        end = datetime.fromisoformat("2026-10-25T02:30:00+01:00")
+        body = next(iter(desired(config(timezone="UTC"), start_timezone="Europe/Berlin",
+                                 end_timezone="Europe/Berlin", start_at=int(start.timestamp() * 1000),
+                                 end_at=int(end.timestamp() * 1000)).values()))
+        self.assertEqual(body["start"]["dateTime"], start.isoformat())
+        self.assertEqual(body["end"]["dateTime"], end.isoformat())
+
+    def test_google_may_omit_timezone_for_single_event(self):
+        d = desired()
+        old = mirrored(next(iter(d.values())))
+        old["start"].pop("timeZone")
+        old["end"].pop("timeZone")
+        self.assertEqual(sync.plan(config(), "demo", d, set(), [old]), ([], [], []))
+
     def test_recurrence_with_date_until_and_exception(self):
         b = next(iter(desired(recurrences=["RRULE:FREQ=WEEKLY;UNTIL=20270331", "EXDATE:20261124T080000Z"]).values()))
         self.assertIn("UNTIL=20270331T215959Z", b["recurrence"][0])
@@ -101,6 +126,24 @@ class ConversionTests(unittest.TestCase):
     def test_exception_object_stops(self):
         with self.assertRaises(sync.SyncError):
             desired(parent_event_id=99)
+
+    def test_detached_occurrence_with_exdate_and_memo(self):
+        master = event(uuid="master", recurrences=["RRULE:FREQ=WEEKLY", "EXDATE:20261124T080000Z"])
+        moved = event(id=2, parent_id=1, recurring_uuid="master", title="Verschoben")
+        memo = event(id=3, category=2, start_at=None, end_at=None, all_day=None)
+        events, deleted = sync.normalize([moved, memo, master], config(), "demo")
+        self.assertFalse(deleted)
+        moved_body = next(body for body in events.values() if body["summary"] == "Verschoben")
+        self.assertEqual(moved_body["recurrence"], [])
+        master_body = next(body for body in events.values() if body["summary"] == "Test")
+        self.assertIn("EXDATE:20261124T080000Z", master_body["recurrence"])
+        self.assertEqual(len(events), 2)
+
+    def test_detached_occurrence_without_matching_exclusion_fails(self):
+        master = event(uuid="master", recurrences=["RRULE:FREQ=WEEKLY"])
+        moved = event(id=2, parent_id=1, recurring_uuid="master")
+        with self.assertRaisesRegex(sync.SyncError, "EXDATE"):
+            sync.normalize([master, moved], config(), "demo")
 
     def test_missing_end_or_all_day_stops(self):
         with self.assertRaises(sync.SyncError):
@@ -127,6 +170,16 @@ class PlanningTests(unittest.TestCase):
         old = mirrored(next(iter(desired().values())))
         d, deleted = sync.normalize([event(deleted_at=1795000000000)], config(), "demo")
         self.assertEqual(sync.plan(config(), "demo", d, deleted, [old])[2], [old])
+
+    def test_deactivated_at_deletes_without_snapshot_confirmation(self):
+        c = config(full_snapshot_confirmed=False)
+        old = mirrored(next(iter(desired(c).values())))
+        record = {"id": 1, "calendar_id": 12345678, "deactivated_at": 1795000000000}
+        d, deleted = sync.normalize([record], c, "demo")
+        self.assertEqual(sync.plan(c, "demo", d, deleted, [old])[2], [old])
+        self.assertEqual(desired(c, deactivated_at=0), desired(c))
+        with self.assertRaisesRegex(sync.SyncError, "deactivated_at"):
+            desired(c, deactivated_at="invalid")
 
     def test_empty_response_guard(self):
         old = mirrored(next(iter(desired().values())))
@@ -200,6 +253,17 @@ class NetworkTests(unittest.TestCase):
         with self.assertRaises(sync.SyncError):
             g.preflight("x", "Demo")
 
+    def test_dedicated_primary_requires_correct_oauth_calendar(self):
+        g = sync.Google(Mock())
+        g.call = Mock(side_effect=[(200, {"id": "mirror@gmail.com", "summary": "Demo"}), (200, {"items": []})])
+        self.assertEqual(g.preflight("mirror@gmail.com", "Demo", dedicated_primary=True), [])
+        self.assertEqual(g.call.call_args_list[0].args, ("GET", "primary"))
+        self.assertEqual(g.call.call_args_list[1].args, ("GET", "mirror@gmail.com", "/events"))
+        g.call = Mock(return_value=(200, {"id": "private@gmail.com", "summary": "Demo"}))
+        with self.assertRaisesRegex(sync.SyncError, "OAuth-Konto"):
+            g.preflight("mirror@gmail.com", "Demo", dedicated_primary=True)
+        g.call.assert_called_once()
+
     def test_insert_retry_collision_updates_owned_event(self):
         b = next(iter(desired().values()))
         g = sync.Google(Mock())
@@ -212,6 +276,19 @@ class NetworkTests(unittest.TestCase):
         g.call = Mock(side_effect=[(409, {}), (200, {"id": "other"})])
         with self.assertRaises(sync.SyncError):
             g.insert("x", next(iter(desired().values())))
+
+    def test_insert_conflict_restores_only_marked_event(self):
+        b = next(iter(desired().values()))
+        g = sync.Google(Mock())
+        cancelled = {**mirrored(b), "status": "cancelled"}
+        g.call = Mock(side_effect=[(409, {}), (200, cancelled), (200, {})])
+        g.insert("x", b)
+        self.assertEqual(g.call.call_args.args[0], "PUT")
+        self.assertEqual(g.call.call_args.kwargs["json"]["status"], "confirmed")
+        cancelled.pop("extendedProperties")
+        g.call = Mock(side_effect=[(409, {}), (200, cancelled)])
+        with self.assertRaisesRegex(sync.SyncError, "Wiederherstellung"):
+            g.insert("x", b)
 
 
 class EndToEndOfflineTests(unittest.TestCase):
@@ -297,6 +374,18 @@ class EndToEndOfflineTests(unittest.TestCase):
     def test_primary_calendar_rejected(self):
         with self.assertRaises(sync.SyncError):
             self.run_main(c=config(google_calendar_id="primary"), google=Mock())
+
+    def test_user_oauth_required_for_dedicated_primary(self):
+        c = config(google_calendar_id="mirror@gmail.com", google_target_type="dedicated_primary")
+        g = Mock()
+        g.preflight.return_value = []
+        self.run_main(c=c, google=g)
+        g.preflight.assert_called_once_with("mirror@gmail.com", "Demo", dedicated_primary=True)
+
+        info = {"type": "service_account"}
+        with patch.dict(os.environ, {"GOOGLE_CREDENTIALS_JSON": json.dumps(info)}, clear=True):
+            with self.assertRaisesRegex(sync.SyncError, "Benutzer-OAuth"):
+                sync.google_session(requires_user=True)
 
     def test_snapshot_merge_last_page_required(self):
         with tempfile.TemporaryDirectory() as tmp:

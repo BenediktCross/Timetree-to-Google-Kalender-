@@ -57,6 +57,24 @@ Das interne Snapshot-Format lautet:
 
 Damit entfallen sowohl ein dauerhaft laufender PC als auch GitHub-Runner und TimeTree-Cookie-Erneuerungen. Die Arbeitsweise ändert sich aber: TimeTree ist dann nicht mehr die führende Terminablage. Ein Produktwechsel erfüllt das Abfrageziel, nicht die ursprüngliche Anforderung einer automatischen TimeTree-Quelle.
 
+## C. ChatGPT erreicht den Zusatzkalender nicht
+
+Diese Variante umgeht die Abhängigkeit von einem Google-Zusatzkalender. Die Authentifizierung und ChatGPT-Suche müssen mit deinem Konto geprüft werden.
+
+1. Lege ein separates kostenloses Gmail-Konto als Spiegel an. Halte deinen bisherigen persönlichen Google-Hauptkalender aus der Konfiguration heraus.
+2. Führe die [Google-OAuth-Schritte](README.md#optional-benutzer-oauth-statt-dienstkonto) mit **diesem separaten Google-Konto** durch. Das erzeugte `token.json` kommt als `GOOGLE_CREDENTIALS_JSON` in GitHub Secrets.
+3. Verwende in `SYNC_CONFIG_JSON` bei jeder Quelle, die in den Hauptkalender des Spiegelkontos schreiben soll, diese Zielfelder. Kalendername und Adresse müssen exakt zu deinem separaten Konto passen.
+
+   ```json
+   "google_target_type": "dedicated_primary",
+   "google_calendar_id": "dein-timetree-spiegel@gmail.com",
+   "expected_google_calendar_name": "Name des Hauptkalenders im separaten Konto"
+   ```
+
+4. Starte `dry-run`. Der Workflow vergleicht Googles tatsächlichen Hauptkalender des OAuth-Kontos mit dieser Gmail-Adresse und dem Kalendernamen. Danach wie üblich in `apply` testen.
+5. Verbinde das separate Konto in [Google Calendar für ChatGPT](https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0). [OpenAI unterstützt mehrere verbundene Google-Kalenderkonten](https://help.openai.com/en/articles/6825453-chatgpt-release-notes). Frage ausdrücklich nach einem neu gespiegelten Testtermin aus dem separaten Konto.
+6. Falls bereits aus demselben TimeTree-Kalender ins alte Google-Ziel gespiegelt wurde, entferne diesen alten Spiegel nach erfolgreichem Test aus der Suche oder lösche den dedizierten Spiegelkalender in Google. Eine geänderte Ziel-ID bereinigt den alten Zielkalender nicht automatisch.
+
 ## Was keine bestätigte Lösung ist
 
 - Ein erfundener TimeTree-ICS-Link oder ein angeblich noch gültiges Token der alten öffentlichen API.

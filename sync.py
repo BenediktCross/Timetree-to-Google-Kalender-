@@ -77,16 +77,20 @@ def load_config(path):
             raise SyncError("TimeTree-Kalender-IDs müssen positive, eindeutige Zahlen sein.")
         seen.add(source)
         c["timetree_calendar_id"] = source
-        # This deliberately excludes personal primary calendar addresses.
-        if not isinstance(target, str) or not target.endswith("@group.calendar.google.com"):
-            raise SyncError("Ziel muss eine dedizierte Google-Kalender-ID mit @group.calendar.google.com sein.")
+        c.setdefault("google_target_type", "secondary")
+        target_types = {
+            "secondary": r"[^@\s]+@group\.calendar\.google\.com",
+            "dedicated_primary": r"[^@\s]+@gmail\.com",
+        }
+        target_pattern = target_types.get(str(c["google_target_type"]))
+        if not target_pattern or not isinstance(target, str) or not re.fullmatch(target_pattern, target):
+            raise SyncError("Google-Ziel: ID des Zusatzkalenders oder Gmail-Adresse eines separaten Kontos mit google_target_type=dedicated_primary angeben.")
         if not isinstance(c.get("expected_google_calendar_name"), str) or not c["expected_google_calendar_name"]:
             raise SyncError("expected_google_calendar_name fehlt.")
         c.setdefault("timezone", "Europe/Berlin")
-        try:
-            ZoneInfo(c["timezone"])
-        except (KeyError, TypeError, ValueError):
-            raise SyncError("Unbekannte IANA-Zeitzone in der Konfiguration.") from None
+        for field in ("timezone", "all_day_timezone"):
+            if field in c:
+                time_zone(c[field], f"Konfiguration {field}")
         for name in ("full_snapshot_confirmed", "allow_empty_source"):
             c[name] = flag(c.get(name, False), name)
         for name, default in (("max_deletions", 25), ("max_delete_fraction", 1.0)):
@@ -195,6 +199,13 @@ def timestamp(value, tz):
         raise SyncError("TimeTree: ungültiger Zeitstempel.") from None
 
 
+def time_zone(value, label):
+    try:
+        return ZoneInfo(value)
+    except (KeyError, TypeError, ValueError):
+        raise SyncError(f"{label}: unbekannte IANA-Zeitzone.") from None
+
+
 def recurrence(lines, all_day, start, tz):
     if not isinstance(lines, list) or not all(isinstance(x, str) for x in lines):
         raise SyncError("TimeTree: recurrences muss eine Liste von Zeichenketten sein.")
@@ -243,8 +254,14 @@ def recurrence(lines, all_day, start, tz):
             for raw in value.split(","):
                 try:
                     if all_day:
-                        datetime.strptime(raw, "%Y%m%d")
-                        values.append(raw)
+                        if re.fullmatch(r"\d{8}", raw):
+                            day = datetime.strptime(raw, "%Y%m%d").date()
+                        else:
+                            fmt = "%Y%m%dT%H%M%SZ" if raw.endswith("Z") else "%Y%m%dT%H%M%S"
+                            dt = datetime.strptime(raw, fmt)
+                            zone = timezone.utc if raw.endswith("Z") else date_tz
+                            day = dt.replace(tzinfo=zone).astimezone(tz).date()
+                        values.append(day.strftime("%Y%m%d"))
                     else:
                         utc = raw.endswith("Z")
                         dt = datetime.strptime(raw.rstrip("Z"), "%Y%m%dT%H%M%S")
@@ -258,29 +275,68 @@ def recurrence(lines, all_day, start, tz):
     return result
 
 
+def is_deleted(event):
+    for field in ("deactivated_at", "deleted_at"):
+        value = event.get(field)
+        if value is None or value == "":
+            continue
+        if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+            raise SyncError(f"TimeTree: unbekannte {field}-Kodierung.")
+        if value > 0:
+            return True
+    deleted = event.get("deleted")
+    if deleted is not None and type(deleted) is not bool:
+        raise SyncError("TimeTree: unbekannte deleted-Kodierung.")
+    return deleted is True
+
+
 def normalize(events, c, namespace):
-    desired, deleted = {}, set()
-    tz = ZoneInfo(c["timezone"])
+    desired, deleted, by_id = {}, set(), {}
     for event in events:
         if not isinstance(event, dict) or not event.get("id") or str(event.get("calendar_id")) != c["timetree_calendar_id"]:
             raise SyncError("TimeTree/Snapshot: fehlende ID oder falscher Kalender.")
-        key = digest([namespace, c["timetree_calendar_id"], str(event["id"])])
-        if key in desired or key in deleted:
+        source_id = str(event["id"])
+        if source_id in by_id:
             raise SyncError("Snapshot: doppelte Quell-ID; erst Seiten zusammenführen.")
-        # These tombstone fields are deliberately explicit; unknown shapes must be reviewed.
-        if event.get("deleted_at") not in (None, 0, "") or event.get("deleted") is True:
+        by_id[source_id] = event
+
+    by_uuid = {event["uuid"]: event for event in by_id.values()
+               if isinstance(event.get("uuid"), str) and event["uuid"]}
+    for source_id, event in by_id.items():
+        key = digest([namespace, c["timetree_calendar_id"], source_id])
+        if is_deleted(event):
             deleted.add(key)
             continue
-        if event.get("deleted") not in (None, False):
-            raise SyncError("TimeTree: unbekannte deleted-Kodierung.")
+        if event.get("category") == 2:
+            # TimeTree uses category 2 for undated memos.
+            continue
         for field in ("recurring_event_id", "recurrence_id", "original_start_at", "parent_event_id"):
             if event.get(field) not in (None, "", 0):
                 raise SyncError("TimeTree: separate Serien-Ausnahme erkannt. Mapping ist unbestätigt; Abbruch.")
+        parent_id = event.get("parent_id")
+        parent_uuid = event.get("recurring_uuid")
+        has_parent_id = parent_id not in (None, 0, "0", "")
+        if has_parent_id or parent_uuid:
+            parent = by_id.get(str(parent_id)) if has_parent_id else by_uuid.get(str(parent_uuid))
+            parent_lines = (parent or {}).get("recurrences")
+            if (parent is None or parent is event or is_deleted(parent)
+                    or (parent_uuid and parent.get("uuid") != parent_uuid)
+                    or event.get("recurrences") or not isinstance(parent_lines, list)
+                    or not any(isinstance(line, str) and line.startswith(("EXDATE:", "EXDATE;"))
+                               for line in parent_lines)):
+                raise SyncError("TimeTree: verschobenes Serienvorkommen ohne eindeutig zuordenbare Serie mit EXDATE.")
         if "all_day" not in event:
             raise SyncError("TimeTree: all_day fehlt; Format zuerst prüfen.")
         all_day = flag(event["all_day"], "TimeTree all_day")
-        start, end = timestamp(event.get("start_at"), tz), timestamp(event.get("end_at"), tz)
-        if end < start or (end == start and not all_day):
+        all_day_zone = c.get("all_day_timezone", c["timezone"])
+        start_zone = all_day_zone if all_day else event.get("start_timezone") or c["timezone"]
+        end_zone = all_day_zone if all_day else event.get("end_timezone") or start_zone
+        tz = time_zone(start_zone, "TimeTree Startzeitzone")
+        end_tz = time_zone(end_zone, "TimeTree Endzeitzone")
+        start = timestamp(event.get("start_at"), tz)
+        end = timestamp(event.get("end_at"), end_tz)
+        start_utc, end_utc = start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+        if end_utc < start_utc or (end_utc == start_utc and not all_day):
             raise SyncError("TimeTree: Ende liegt vor/am Beginn eines zeitgebundenen Termins.")
         for field in ("title", "note", "location"):
             if event.get(field) is not None and not isinstance(event[field], str):
@@ -296,9 +352,10 @@ def normalize(events, c, namespace):
                 ed = sd + timedelta(days=1)
             gs, ge = {"date": sd.isoformat()}, {"date": ed.isoformat()}
         else:
-            gs = {"dateTime": start.isoformat(), "timeZone": c["timezone"]}
-            ge = {"dateTime": end.isoformat(), "timeZone": c["timezone"]}
-        rules = recurrence(event.get("recurrences") or [], all_day, start, tz)
+            gs = {"dateTime": start.isoformat(), "timeZone": start_zone}
+            ge = {"dateTime": end.isoformat(), "timeZone": end_zone}
+        lines = event.get("recurrences")
+        rules = recurrence([] if lines is None else lines, all_day, start, tz)
         body = {
             "summary": event.get("title") or "(Ohne Titel)",
             "description": event.get("note") or "",
@@ -314,15 +371,18 @@ def normalize(events, c, namespace):
     return desired, deleted
 
 
-def google_session():
-    # Imported lazily so --probe and unit tests need no Google login.
-    from google.auth.transport.requests import AuthorizedSession
-    from google.oauth2 import service_account
-    from google.oauth2.credentials import Credentials
+def google_session(*, requires_user=False):
     raw = os.environ.get("GOOGLE_CREDENTIALS_JSON")
     if not raw:
         raise SyncError("GitHub Secret GOOGLE_CREDENTIALS_JSON fehlt.")
     info = read_json(raw, "GOOGLE_CREDENTIALS_JSON")
+    if requires_user and isinstance(info, dict) and info.get("type") == "service_account":
+        raise SyncError("dedicated_primary benötigt Benutzer-OAuth für das separate Google-Konto.")
+    # Keep Google authentication dependencies out of the source-only probe.
+    from google.auth.transport.requests import AuthorizedSession, Request
+    from google.oauth2 import service_account
+    from google.oauth2.credentials import Credentials
+
     try:
         if info.get("type") == "service_account":
             if info.get("token_uri") != "https://oauth2.googleapis.com/token":
@@ -333,7 +393,6 @@ def google_session():
         else:
             raise ValueError()
         # Refresh errors must never print token endpoint response bodies.
-        from google.auth.transport.requests import Request
         creds.refresh(Request())
         return AuthorizedSession(creds)
     except Exception:
@@ -349,8 +408,10 @@ class Google:
                             "https://www.googleapis.com/calendar/v3/calendars/" + quote(calendar, safe="") + suffix,
                             label="Google", **kwargs)
 
-    def preflight(self, calendar, expected):
-        _, metadata = self.call("GET", calendar)
+    def preflight(self, calendar, expected, *, dedicated_primary=False):
+        _, metadata = self.call("GET", "primary" if dedicated_primary else calendar)
+        if dedicated_primary and metadata.get("id") != calendar:
+            raise SyncError("Google: OAuth-Konto und konfigurierte Gmail-Adresse stimmen nicht überein. Keine Änderung.")
         if metadata.get("summary") != expected:
             raise SyncError("Google-Kalendername stimmt nicht mit expected_google_calendar_name überein. Keine Änderung.")
         items, token, seen = [], None, set()
@@ -376,10 +437,12 @@ class Google:
                               params={"sendUpdates": "none"}, allowed=(409,))
         if status == 409:
             _, existing = self.call("GET", calendar, "/events/" + event["id"])
-            if existing.get("status") == "cancelled":
-                raise SyncError("Google: feste Termin-ID ist gelöscht. Wiederherstellung laut Anleitung nötig.")
             if existing.get("extendedProperties", {}).get("private") != body["extendedProperties"]["private"]:
+                if existing.get("status") == "cancelled":
+                    raise SyncError("Google: gelöschte Termin-ID ohne Bridge-Markierung. Wiederherstellung laut Anleitung nötig.")
                 raise SyncError("Google: ID-Kollision mit fremdem Termin; Abbruch.")
+            if existing.get("id") != event["id"] or not existing.get("etag"):
+                raise SyncError("Google: bestehender Termin bei ID-Konflikt ohne gültige ID/ETag.")
             self.update(calendar, existing, body)
 
     def update(self, calendar, old, body):
@@ -405,7 +468,7 @@ def same_content(old, new):
             try:
                 if datetime.fromisoformat(a["dateTime"].replace("Z", "+00:00")) != datetime.fromisoformat(b["dateTime"]):
                     return False
-                if a.get("timeZone") != b["timeZone"]:
+                if a.get("timeZone") != b["timeZone"] and (new["recurrence"] or a.get("timeZone")):
                     return False
             except (KeyError, ValueError, TypeError):
                 return False
@@ -422,7 +485,8 @@ def plan(c, namespace, desired, deleted, existing):
             owned.setdefault(p["ttKey"], []).append(event)
     inserts, updates, removals = [], [], []
     for key, body in desired.items():
-        candidates = sorted(owned.get(key, []), key=lambda x: x["id"])
+        expected_id = "tt" + key
+        candidates = sorted(owned.get(key, []), key=lambda event: (event["id"] != expected_id, event["id"]))
         if not candidates:
             inserts.append(body)
         else:
@@ -480,12 +544,14 @@ def main(argv=None):
     if args.probe:
         LOG.info("Probe erfolgreich: nur Formatprüfung; Vollständigkeit und Live-Synchronisierung damit NICHT bewiesen.")
         return
-    google = Google(google_session())
+    requires_user = any(c["google_target_type"] == "dedicated_primary" for c, _, _ in sources)
+    google = Google(google_session(requires_user=requires_user))
     existing, plans = {}, []
     for c, desired, deleted in sources:
         target = c["google_calendar_id"]
         if target not in existing:
-            existing[target] = google.preflight(target, c["expected_google_calendar_name"])
+            existing[target] = google.preflight(target, c["expected_google_calendar_name"],
+                                                dedicated_primary=c["google_target_type"] == "dedicated_primary")
         plans.append((target, *plan(c, cfg["namespace"], desired, deleted, existing[target])))
     counts = [sum(len(p[i]) for p in plans) for i in (1, 2, 3)]
     LOG.info("Plan: %d anlegen, %d aktualisieren, %d löschen. Modus: %s.", *counts, "APPLY" if args.apply else "DRY-RUN")

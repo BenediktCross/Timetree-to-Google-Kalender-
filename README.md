@@ -2,7 +2,7 @@
 
 **Für die Einrichtung in diesem Repository zuerst [INBETRIEBNAHME.md](INBETRIEBNAHME.md) öffnen.** Dort stehen die direkten Links zu Secrets, Tests und Zeitplan-Aktivierung. Code-Tests verwenden ausschließlich erfundene Daten; die automatische Kalender-Synchronisierung ist zunächst ausgeschaltet.
 
-Stand der Quellenprüfung: **17. November 2026**. Die Bridge ist vorbereitet und offline getestet, aber **nicht mit deinem TimeTree-/Google-Konto verbunden**. Die vollständige Live-Funktion ist noch nicht bestätigt.
+Stand der Quellenprüfung **17. November 2026**. Der [erste manuelle Workflow-Lauf](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/runs/44053298290) erreichte den Kalenderabgleich und stoppte wegen fehlender Secrets. Für die Live-Prüfung und den Zeitplan ist die [Inbetriebnahme](INBETRIEBNAHME.md) erforderlich.
 
 Eine kostenlose, zeitgesteuerte Bridge lässt sich mit diesen Dateien aufsetzen. **Eine offiziell unterstützte, garantiert dauerhafte und wartungsfreie TimeTree-Synchronisierung ist nicht verfügbar.** Vor der Aktivierung müssen insbesondere Vollständigkeit, Wiederholungen und ChatGPT-Zugriff mit deinen Kalendern geprüft werden.
 
@@ -13,10 +13,10 @@ Eine kostenlose, zeitgesteuerte Bridge lässt sich mit diesen Dateien aufsetzen.
 | Alte öffentliche TimeTree-API | Offiziell am 22.12.2023 eingestellt | Alte Personal-Access-Token-/Connect-App-Anleitungen helfen hier nicht. [TimeTree-Mitteilung](https://timetreeapp.com/intl/en/newsroom/2023-12-14/connect-app-api-202312) |
 | Offizieller TimeTree-Export | Automatischer Export in externe Kalender laut Hilfe nicht verfügbar | Es gibt keinen hier bestätigten offiziellen ICS-Abo-Link für private TimeTree-Kalender. [TimeTree-Hilfe](https://support.timetreeapp.com/hc/en-us/articles/360000629341-How-to-Use-Other-Calendars-such-as-Google-Calendar) |
 | Verlinktes Projekt | Quellcode geprüft, Commit `b603be4643b5055a4aba811cc25f219f69ddcc45` | Nutzt `_session_id` und `/api/v1/calendar/{id}/events/sync?since=…`; kopiert normalerweise nur morgen, löscht vorher zukünftige Zieltermine und setzt Japan-Zeit voraus. [Projekt](https://github.com/Kumanogorou/timetree-to-google-calendar/tree/b603be4643b5055a4aba811cc25f219f69ddcc45) |
-| Diese Bridge | 36 Offline-Tests bestanden | Feste IDs, Änderungen, Löschplanung, Paginierung, Kalendertrennung, Retry-Verhalten und Schreibschutz sind simuliert geprüft. Das ist kein Live-Nachweis der TimeTree-Schnittstelle. |
+| Diese Bridge | Offline-Test-Suite und [GitHub-Codeprüfung](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/workflows/verify.yml) | Die Tests simulieren IDs, Änderungen, Löschplanung, Paginierung, Kalendertrennung und Schreibschutz. |
 | Alle historischen/zukünftigen TimeTree-Termine | **Unbestätigt** | Es werden alle Seiten ab `since=0` ohne Datumsfilter verarbeitet. Ob TimeTree dabei tatsächlich alles liefert, ist nicht öffentlich zugesichert. |
-| Löschungen aus TimeTree | Mapping implementiert, reale Datenform **unbestätigt** | Explizite `deleted_at`-/`deleted=true`-Datensätze werden verarbeitet. Löschung durch Fehlen erfordert `full_snapshot_confirmed=true`. |
-| Wiederholungen | RFC-RRULE, EXDATE und RDATE implementiert, synthetisch getestet | Getrennte Ausnahmen/verschobene Einzelvorkommen können anders kodiert sein; bekannte Ausnahmefelder führen zum Abbruch. Unbekannte TimeTree-Ausnahmeformen sind damit nicht automatisch erkannt. |
+| Löschungen aus TimeTree | Mapping implementiert, reale Datenform **unbestätigt** | Explizite Löschdatensätze werden verarbeitet, darunter das [in einem TimeTree-Sync-Projekt dokumentierte Feld `deactivated_at`](https://github.com/shiva9ro/timetree-to-gcal). Es ist offen, ob bei deinem Vollabruf alle gelöschten Datensätze mitkommen. Löschung durch Fehlen erfordert `full_snapshot_confirmed=true`. |
+| Wiederholungen | RFC-RRULE, EXDATE und RDATE implementiert, synthetisch getestet | Bekannte verschobene Vorkommen mit Serienbezug und `EXDATE` werden als Einzeltermine gespiegelt. Andere erkennbare Ausnahmeformen stoppen den Lauf. Live prüfen, wie TimeTree die Ausnahmen deiner Serien liefert. |
 | TimeTree-Sitzung | Ablaufzeit **nicht zugesichert** | Ein neuer Cookie kann manuell nötig werden. Kein automatischer Passwortlogin und keine Umgehung von Login-Schutz. |
 | Google Calendar API | Standardnutzung derzeit ohne Zusatzkosten | Quoten gelten. Die aktuelle Dokumentation kündigt Änderungen oberhalb hoher Nutzungsgrenzen an; kein Zahlungsprofil nötig für diese Einrichtung. [Google-Quoten](https://developers.google.com/workspace/calendar/api/guides/quota) |
 | GitHub Actions | Kostenloses Kontingent verfügbar | Standard-Runner in öffentlichen Repositories sind kostenlos; private Repositories teilen sich ein Kontingent mit anderer Nutzung. Ohne Zahlungsmittel stoppt kostenpflichtige Mehrnutzung. [GitHub-Abrechnung](https://docs.github.com/en/billing/concepts/product-billing/github-actions) |
@@ -39,7 +39,7 @@ requirements-setup.txt        Nur für optionalen lokalen OAuth-Login
 authorize_google.py           Optionaler einmaliger OAuth-Login
 merge_snapshots.py            Kostenlose manuelle Notfallmigration
 examples/snapshot.example.json Erfundene Quelldaten zum Prüfen
-tests/test_sync.py             36 Offline-Tests
+tests/test_sync.py             Offline-Tests für Abgleich und Schutzregeln
 FALLBACK.md                    Grenzen und kostenlose Alternativen
 SECURITY.md                    Umgang mit Geheimnissen und Daten
 TESTBERICHT.md                 Prüfungen und noch offene Live-Tests
@@ -47,7 +47,7 @@ THIRD_PARTY_NOTICES.md         Herkunft und Änderungen gegenüber dem Projekt
 LICENSE                       MIT-Lizenz
 ```
 
-Einweg-Synchronisierung: TimeTree bleibt führend. Bearbeitungen an Spiegelterminen in Google werden beim nächsten Lauf zurückgesetzt; Änderungen fließen nicht zurück nach TimeTree. Synchronisiert werden Titel, Notiz (`note`), Ort (`location`), Beginn/Ende, ganztägige Termine und unterstützte Wiederholungen. Kommentare, Bilder, Chats, Teilnehmer, TimeTree-Erinnerungen und Farbzuordnungen werden nicht übertragen. Google-Erinnerungen der Spiegeltermine sind deaktiviert; niemand wird eingeladen.
+Einweg-Synchronisierung: TimeTree bleibt führend. Bearbeitungen an Spiegelterminen in Google werden beim nächsten Lauf zurückgesetzt; Änderungen fließen nicht zurück nach TimeTree. Synchronisiert werden Titel, Notiz (`note`), Ort (`location`), Beginn/Ende, ganztägige Termine und unterstützte Wiederholungen. Undatierte TimeTree-Memos werden übersprungen. Kommentare, Bilder, Chats, Teilnehmer, TimeTree-Erinnerungen und Farbzuordnungen werden nicht übertragen. Google-Erinnerungen der Spiegeltermine sind deaktiviert; niemand wird eingeladen.
 
 Jeder Lauf lädt alle konfigurierten Quellen vollständig und prüft alle Google-Ziele, bevor er schreibt. Anschließend werden neue/geänderte Termine übertragen; erst nach erfolgreichen Schreiboperationen beginnen Löschungen. Nur mit diesem Namespace und dieser Quelle markierte Termine werden verändert. Bei einem Fehler während des Schreibens können bereits einzelne Änderungen erfolgt sein: Google bietet keine Transaktion über mehrere Termine. Der nächste erfolgreiche Lauf gleicht sie ab.
 
@@ -58,9 +58,9 @@ Die feste Google-ID wird aus Namespace, TimeTree-Kalender-ID und TimeTree-Termin
 1. Öffne [Google Kalender](https://calendar.google.com/) mit dem Google-Konto, das du in ChatGPT verwenden willst.
 2. Links bei „Weitere Kalender“ → „+“ → „Neuen Kalender einrichten“. Name zum Beispiel **TimeTree – Familie**. Zeitzone **Europe/Berlin**.
 3. Lege dort einen harmlosen Testtermin mit einem einmaligen Namen an, etwa „TT-Verbindungstest 8472“, für morgen.
-4. In ChatGPT → Einstellungen → Plugins/Apps → Google Calendar verbinden. Bezeichnungen variieren nach Oberfläche. Verbinde dein persönliches Google-Konto, **nicht** das später erstellte Dienstkonto.
+4. In ChatGPT die App [Google Calendar](https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0) hinzufügen und Google verbinden. Bezeichnungen variieren nach Oberfläche. Verbinde dein persönliches Google-Konto, **nicht** das später erstellte Dienstkonto.
 5. Frage: „Suche über Google Kalender den Termin TT-Verbindungstest 8472 für morgen im Kalender TimeTree – Familie. Nenne Beginn und Kalender.“
-6. Prüfe die tatsächliche Connector-Antwort. Falls sie den Zusatzkalender nicht erreicht: Kontoauswahl, Freigaben, Connector-Funktionen und Tarif prüfen. Nicht annehmen, dass eine erfolgreiche Google-Spiegelung automatisch ChatGPT-Zugriff beweist. Die Bridge schreibt absichtlich nicht in deinen Hauptkalender.
+6. Prüfe die tatsächliche Connector-Antwort. Falls sie den Zusatzkalender nicht erreicht, prüfe das verbundene Konto und teste im neuen Chat. Als zweite Zieloption gibt es den Hauptkalender eines [separaten Gmail-Kontos](FALLBACK.md#c-chatgpt-erreicht-den-zusatzkalender-nicht).
 7. Lösche danach nur diesen manuell angelegten Testtermin. Er hätte keine Bridge-Markierung und würde vom Skript ohnehin nicht verändert.
 
 ## 4. Google-Zugang einrichten – ohne Kreditkarte
@@ -144,7 +144,8 @@ Empfohlen ist zunächst ein **privates Repository** auf GitHub Free: Code, Ausf�
          "google_calendar_id": "DEINE_ID@group.calendar.google.com",
          "expected_google_calendar_name": "TimeTree – Familie",
          "timezone": "Europe/Berlin",
-         "all_day_end_mode": "exclusive",
+         "all_day_timezone": "UTC",
+         "all_day_end_mode": "inclusive",
          "full_snapshot_confirmed": false,
          "allow_empty_source": false,
          "max_deletions": 25,
@@ -154,7 +155,7 @@ Empfohlen ist zunächst ein **privates Repository** auf GitHub Free: Code, Ausf�
    }
    ```
 
-6. Mehrere Kalender: in `calendars` weitere Objekte mit jeweils anderer TimeTree-ID ergänzen. Dasselbe Google-Ziel ist zulässig; dann muss der erwartete Kalendername übereinstimmen. Pro Quelle die TimeTree-Zeitzone richtig angeben, bei aus Japan stammenden Ganztagsterminen ggf. `Asia/Tokyo` statt Berlin. Es gibt keine bestätigte automatische Zeitzonenerkennung des internen Formats.
+6. Mehrere Kalender: in `calendars` weitere Objekte mit jeweils anderer TimeTree-ID ergänzen. Dasselbe Google-Ziel ist zulässig; dann muss der erwartete Kalendername übereinstimmen. Zeitgebundene Termine verwenden die von TimeTree gelieferten IANA-Zeitzonen und ersatzweise `timezone`. Für Ganztagstermine verwendet die neue Vorlage `all_day_timezone: UTC` und ein inklusives TimeTree-Enddatum, wie [von einer Community-Integration dokumentiert](https://github.com/acdcnow/HA_timetree_import#timetree-web-api-reference). Bestehende Konfigurationen ohne `all_day_timezone` behalten die bisherige Zeitzonenwahl. Überprüfe die Anzeige an einem mehrtägigen Termin, bevor du planmäßige Läufe aktivierst.
 7. „Settings → Actions → General“: Actions aktivieren und die beiden offiziellen `actions/checkout`-/`actions/setup-python`-Actions zulassen. Der Workflow braucht nur `contents: read`. Es wird kein eigener GitHub-PAT benötigt.
 8. **Noch keine** Variable `SYNC_ENABLED=true` anlegen. Dadurch bleibt der automatische Schreibbetrieb aus.
 
@@ -183,7 +184,7 @@ Wenn besondere Serien falsch erscheinen oder die Vollständigkeit nicht nachweis
 3. Private Repositories: Das zur Quellenprüfung ausgewiesene kostenlose Compute-Kontingent entspricht bei Standard-Linux ungefähr 2.000 Minuten. Der konfigurierte 4-Minuten-Job ist als Bremse gedacht: **12 × 31 × 4 = 1.488 Minuten** im rechnerischen Höchstfall der geplanten Jobs, zuzüglich Rundung/Runner-Nachlauf und manueller Läufe. Das ist eine Planung, keine garantierte Abrechnungsobergrenze. Auch andere Repositories/Produkte können dasselbe Kontingent verbrauchen. [Aktuelle GitHub-Abrechnung](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 4. GitHub → Kontoeinstellungen → „Billing and licensing/Usage“ kontrollieren. Kein Zahlungsmittel hinterlegen. Ist das kostenlose Kontingent erschöpft, stoppt die Ausführung; es entsteht dadurch keine zuverlässige Dauerverfügbarkeit.
 5. Keine Artefakte, Paketablagen oder persistenten Actions-Caches werden erzeugt. Logs und die kurze Job-Zusammenfassung reichen aus. Die direkte und transitive Paketversionierung steht in `requirements.txt`; das Setup-OAuth-Paket läuft nicht auf dem Runner.
-6. Falls 4 Minuten für die initiale große Historie nicht reichen, nicht blind den Zeitplan beschleunigen. Erst `SYNC_ENABLED=false`, Ursache und Datenmenge prüfen. Ein einmaliger längerer manueller Lauf kann eingerichtet werden, verbraucht aber mehr Kontingent. Bei sehr großen Kalendern sind die Anforderungen an kurzen Gratisbetrieb möglicherweise nicht gleichzeitig erfüllbar.
+6. Falls 4 Minuten für die initiale große Historie nicht reichen, `SYNC_ENABLED=false` setzen und den manuellen Lauf wiederholen. Bereits erfolgreiche Änderungen werden beim erneuten Abgleich erkannt. Ein zeitlich längerer manueller Lauf kann bei Bedarf im Workflow konfiguriert werden. Bei sehr großen Kalendern sind die Anforderungen an kurzen Gratisbetrieb möglicherweise nicht gleichzeitig erfüllbar.
 7. Öffentliches Repository als Option: Standard-Runner bleiben kostenlos, aber Logs/Anzahlen und Code sind öffentlich; Secrets bleiben separat. Nach 60 Tagen ohne Repository-Aktivität kann der Zeitplan deaktiviert werden. Regelmäßig selbst prüfen und bei Bedarf über Actions reaktivieren. Kein automatischer Schein-Commit/Keepalive ist enthalten.
 8. Beachte die verlinkten Actions-Nutzungsgrenzen. Dieses Repository ist ein Softwareprojekt mit Tests; daraus folgt keine bestätigte Erlaubnis, Actions unbegrenzt als produktiven Kalenderdienst zu nutzen. Die kostenlose Migration/Google-Quelle in `FALLBACK.md` vermeidet diese Hosting-Abhängigkeit.
 
@@ -204,7 +205,7 @@ Actions → letzter Lauf → Schritt „Kalender abgleichen“. Geloggt werden n
 | TimeTree leer / Löschschutz | In TimeTree gegenprüfen; nur bei beabsichtigter Bereinigung passende Optionen/Limits setzen. |
 | HTTP 429/5xx | Begrenzte Retries mit Wartezeit sind eingebaut. Beim nächsten Zeitplan wird neu abgeglichen. |
 | HTTP 412 | Jemand hat den Google-Termin parallel geändert; nächsten Lauf abwarten. Gleichzeitige lokale Instanzen abstellen. |
-| HTTP 409/410 bei einem früher in Google gelöschten Spiegeltermin | Feste IDs können mit Google-Löschmarkierungen kollidieren. Termin ggf. im Google-Papierkorb wiederherstellen und erneut laufen lassen. Falls das nicht geht: Zeitplan pausieren, **einen neuen leeren dedizierten Zielkalender** anlegen/freigeben, Konfiguration auf ihn umstellen und zuerst dry-run/apply testen. Alten Spiegelkalender anschließend in Google manuell entfernen. Nicht nur den Namespace ändern: sonst bleiben alte Kopien stehen. |
+| HTTP 409/410 bei einem früher in Google gelöschten Spiegeltermin | Die Bridge versucht eine Wiederherstellung, wenn Google die feste ID samt Bridge-Markierung und ETag liefert. Bei verbleibendem Konflikt Termin im Google-Papierkorb wiederherstellen und erneut laufen lassen. Falls das nicht geht: Zeitplan pausieren, **einen neuen leeren dedizierten Zielkalender** anlegen/freigeben, Konfiguration auf ihn umstellen und zuerst dry-run/apply testen. Alten Spiegelkalender anschließend in Google manuell entfernen. Nicht nur den Namespace ändern: sonst bleiben alte Kopien stehen. |
 | Keine neuen Läufe | Variable/Standardbranch/Actions-Aktivierung, Kontingent und bei öffentlichem Repo Inaktivitätsregel prüfen. |
 | Google korrekt, ChatGPT findet nichts | Richtiges verbundenes Google-Konto, Zielkalender, Connector-Berechtigungen, Tarif und Connector-Aktualisierung prüfen. Die Bridge kann dessen Umfang nicht erweitern. |
 

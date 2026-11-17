@@ -10,7 +10,12 @@
 - Python-Dateien kompiliert; `pip check` meldet keine widersprüchlichen Abhängigkeiten. Workflow-YAML geparst; Cron-Zeitplan, Timeout und minimale Berechtigungen geprüft.
 - ZIP-Archiv inklusive verstecktem `.github`-Ordner erstellt und auf Integrität geprüft; keine echten Secrets oder Kalenderdaten enthalten.
 
-## Inhalt der 36 Tests
+## Ergänzungen nach dem ersten GitHub-Lauf
+
+- Der [ursprüngliche Code-Workflow](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/runs/44053009156) war erfolgreich. Im [manuellen Kalenderlauf](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/runs/44053298290) fehlten die Konfiguration und beide Zugangsdaten. Der Abgleich stoppte vor der ersten Anfrage an TimeTree.
+- Die erweiterte Testsuite lief lokal mit Python 3.12, **45 Tests erfolgreich**. Sie prüft zusätzlich `deactivated_at`, Ganztagsdaten in UTC, die Winterzeitumstellung, bekannte verschobene Serienvorkommen, Wiederherstellung markierter Google-Termine und die separate Gmail-Zieloption. Das Ergebnis für den aktuellen Commit steht unter [Code und Schutztests](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/workflows/verify.yml).
+
+## Inhalt der ursprünglichen Tests
 
 - Stabile Quellschlüssel bei Titel-/Zeitänderungen; keine Dubletten im zweiten Lauf.
 - Vergleich von UTC-/lokaler Google-Zeitdarstellung; Rücksetzen einer Google-seitigen Änderung.
@@ -31,7 +36,7 @@
 
 ## Nicht ausgeführt / nicht bestätigt
 
-- Kein Login in dein TimeTree-, Google- oder GitHub-Konto; keine echten Zugangsdaten verwendet.
+- Kein TimeTree- oder Google-Kontologin und keine Kalender-Zugangsdaten verwendet. GitHub-Repository und Workflow-Läufe wurden über die verbundene GitHub-App geprüft.
 - Kein authentifizierter TimeTree-Live-Abruf. Der interne Endpoint, seine Vollständigkeit, Löschdatensätze, Token-Laufzeit und echten Serien-Ausnahmen sind nicht als aktuell funktionierend bewiesen.
 - Keine Google-Termine angelegt, geändert oder gelöscht. Dienstkonto-Freigabe und OAuth-Autorisierung für deine Konten sind noch einzurichten.
 - Ein echter zeitgesteuerter Kalenderabgleich ist noch nicht nachgewiesen; dafür fehlen die privaten Zugangsdaten und die Live-Abnahme. Der separate Code-Workflow verwendet ausschließlich erfundene Daten.
