@@ -1,6 +1,6 @@
 # Deine nächsten Schritte
 
-Der [bisherige manuelle Lauf](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/runs/44053298290) stoppte bei der Einrichtung. Der Kalenderabgleich benötigt die drei GitHub Secrets und der Zeitplan anschließend deine Freigabe über die Variable.
+Der Kalenderabgleich benötigt die drei GitHub Secrets und Zugriff auf den Google-Zielkalender. Der Zeitplan läuft standardmäßig alle zwei Stunden.
 
 ## 1. Google Calendar in ChatGPT verbinden
 
@@ -33,14 +33,9 @@ Anlegen, Bearbeiten, Löschen, alte/zukünftige Termine und Serien-Ausnahmen gem
 
 Zum Schluss einen gespiegelten Testtermin ausdrücklich über den Google-Kalender-Connector in ChatGPT suchen. Die Bridge kann keine fehlenden Connector-Rechte oder Tarifbeschränkungen aufheben.
 
-## 4. Zeitplan aktivieren
+## 4. Zeitplan und Pause
 
-Erst nach erfolgreichem Live-Test unter [Actions-Variablen](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/settings/variables/actions) anlegen:
-
-- Name: `SYNC_ENABLED`
-- Wert: `true`
-
-Dann ist alle zwei Stunden ein schreibender Lauf eingeplant. Ohne diese Variable oder mit `false` läuft keine automatische Kalender-Synchronisierung. Mit `false` kannst du jederzeit pausieren.
+Der Workflow ist alle zwei Stunden zur Minute 17 eingeplant. Zum Pausieren kannst du unter [Actions-Variablen](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/settings/variables/actions) `SYNC_ENABLED=false` setzen. Mit `true` oder ohne die Variable läuft der Zeitplan wieder.
 
 GitHub-Läufe können verspätet sein/ausfallen. Bei öffentlichen Repositories kann der Zeitplan nach 60 Tagen ohne Repository-Aktivität deaktiviert werden. TimeTree-Cookies können ablaufen. Details, Quellen und kostenlose Ausweichlösung: [README](README.md), [FALLBACK](FALLBACK.md).
 

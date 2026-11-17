@@ -1,8 +1,8 @@
 # TimeTree → Google Kalender → ChatGPT
 
-**Für die Einrichtung in diesem Repository zuerst [INBETRIEBNAHME.md](INBETRIEBNAHME.md) öffnen.** Dort stehen die direkten Links zu Secrets, Tests und Zeitplan-Aktivierung. Code-Tests verwenden ausschließlich erfundene Daten; die automatische Kalender-Synchronisierung ist zunächst ausgeschaltet.
+**Für die Einrichtung in diesem Repository zuerst [INBETRIEBNAHME.md](INBETRIEBNAHME.md) öffnen.** Dort stehen die direkten Links zu Secrets, Tests und Zeitplan. Code-Tests verwenden ausschließlich erfundene Daten.
 
-Stand der Quellenprüfung **17. November 2026**. Der [erste manuelle Workflow-Lauf](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/runs/44053298290) erreichte den Kalenderabgleich und stoppte wegen fehlender Secrets. Für die Live-Prüfung und den Zeitplan ist die [Inbetriebnahme](INBETRIEBNAHME.md) erforderlich.
+Stand der Quellenprüfung **17. November 2026**. Der [GitHub-Workflow](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/workflows/sync.yml) synchronisiert die eingerichteten Kalender alle zwei Stunden.
 
 Eine kostenlose, zeitgesteuerte Bridge lässt sich mit diesen Dateien aufsetzen. **Eine offiziell unterstützte, garantiert dauerhafte und wartungsfreie TimeTree-Synchronisierung ist nicht verfügbar.** Vor der Aktivierung müssen insbesondere Vollständigkeit, Wiederholungen und ChatGPT-Zugriff mit deinen Kalendern geprüft werden.
 
@@ -13,23 +13,23 @@ Eine kostenlose, zeitgesteuerte Bridge lässt sich mit diesen Dateien aufsetzen.
 | Alte öffentliche TimeTree-API | Offiziell am 22.12.2023 eingestellt | Alte Personal-Access-Token-/Connect-App-Anleitungen helfen hier nicht. [TimeTree-Mitteilung](https://timetreeapp.com/intl/en/newsroom/2023-12-14/connect-app-api-202312) |
 | Offizieller TimeTree-Export | Automatischer Export in externe Kalender laut Hilfe nicht verfügbar | Es gibt keinen hier bestätigten offiziellen ICS-Abo-Link für private TimeTree-Kalender. [TimeTree-Hilfe](https://support.timetreeapp.com/hc/en-us/articles/360000629341-How-to-Use-Other-Calendars-such-as-Google-Calendar) |
 | Verlinktes Projekt | Quellcode geprüft, Commit `b603be4643b5055a4aba811cc25f219f69ddcc45` | Nutzt `_session_id` und `/api/v1/calendar/{id}/events/sync?since=…`; kopiert normalerweise nur morgen, löscht vorher zukünftige Zieltermine und setzt Japan-Zeit voraus. [Projekt](https://github.com/Kumanogorou/timetree-to-google-calendar/tree/b603be4643b5055a4aba811cc25f219f69ddcc45) |
-| Diese Bridge | Offline-Test-Suite und [GitHub-Codeprüfung](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/workflows/verify.yml) | Die Tests simulieren IDs, Änderungen, Löschplanung, Paginierung, Kalendertrennung und Schreibschutz. |
+| Diese Bridge | Offline-Test-Suite und [GitHub-Codeprüfung](https://github.com/BenediktCross/Timetree-to-Google-Kalender-/actions/workflows/verify.yml) | Die Tests decken IDs, Änderungen, Löschplanung, Paginierung, Kalendertrennung und Schreibschutz ab. |
 | Alle historischen/zukünftigen TimeTree-Termine | **Unbestätigt** | Es werden alle Seiten ab `since=0` ohne Datumsfilter verarbeitet. Ob TimeTree dabei tatsächlich alles liefert, ist nicht öffentlich zugesichert. |
-| Löschungen aus TimeTree | Mapping implementiert, reale Datenform **unbestätigt** | Explizite Löschdatensätze werden verarbeitet, darunter das [in einem TimeTree-Sync-Projekt dokumentierte Feld `deactivated_at`](https://github.com/shiva9ro/timetree-to-gcal). Wenn ein bereits gespiegelter Termin im Vollabruf fehlt, prüft die Bridge den separaten TimeTree-Änderungsabruf auf einen expliziten Löschdatensatz. Löschung ohne diesen Nachweis erfordert `full_snapshot_confirmed=true`. |
+| Löschungen aus TimeTree | Reale Löschmeldungen im TimeTree-Änderungsabruf gesehen | Explizite Löschdatensätze werden verarbeitet, darunter das [in einem TimeTree-Sync-Projekt dokumentierte Feld `deactivated_at`](https://github.com/shiva9ro/timetree-to-gcal). Wenn ein bereits gespiegelter Termin im Vollabruf fehlt, prüft die Bridge den separaten TimeTree-Änderungsabruf auf einen expliziten Löschdatensatz. Löschung ohne diesen Nachweis erfordert `full_snapshot_confirmed=true`. |
 | Wiederholungen | RFC-RRULE, EXDATE und RDATE implementiert, synthetisch getestet | Verschobene Vorkommen mit `EXDATE`, mit begrenzter Hauptserie oder ohne aktiven Haupttermin werden einzeln gespiegelt. Bei begrenzten Serien ohne `EXDATE` bleiben die gelieferten Regeln erhalten. Andere erkennbare Ausnahmeformen stoppen den Lauf. Live prüfen, wie TimeTree die Ausnahmen deiner Serien liefert. |
 | TimeTree-Sitzung | Ablaufzeit **nicht zugesichert** | Ein neuer Cookie kann manuell nötig werden. Kein automatischer Passwortlogin und keine Umgehung von Login-Schutz. |
 | Google Calendar API | Standardnutzung derzeit ohne Zusatzkosten | Quoten gelten. Die aktuelle Dokumentation kündigt Änderungen oberhalb hoher Nutzungsgrenzen an; kein Zahlungsprofil nötig für diese Einrichtung. [Google-Quoten](https://developers.google.com/workspace/calendar/api/guides/quota) |
 | GitHub Actions | Kostenloses Kontingent verfügbar | Standard-Runner in öffentlichen Repositories sind kostenlos; private Repositories teilen sich ein Kontingent mit anderer Nutzung. Ohne Zahlungsmittel stoppt kostenpflichtige Mehrnutzung. [GitHub-Abrechnung](https://docs.github.com/en/billing/concepts/product-billing/github-actions) |
 | Zeitplan | Best effort, kein Echtzeitdienst | Ausführung kann verspätet sein/ausfallen. Öffentliche Repositories: Deaktivierung nach 60 Tagen ohne Repository-Aktivität. [GitHub-Zeitplan](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule) |
 | Langfristiger Produktionsbetrieb auf Actions | **Keine Zusage** | GitHub positioniert Actions für den Softwareentwicklungszyklus und beschränkt den Einsatz als allgemeine Serverless-Plattform. Ob diese persönliche periodische Bridge akzeptiert wird, ist nicht bestätigt. Ein Testlauf macht daraus keine garantierte Hosting-Erlaubnis. [Nutzungsbedingungen](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features#actions) |
-| Google-Kalender in ChatGPT | Für dein Konto und den Zielkalender **noch zu prüfen** | Verfügbarkeit hängt von Tarif, Region und Kontoeinstellungen ab. Insbesondere den Zugriff auf den verwendeten Zusatzkalender zuerst testen. [OpenAI-Hilfe](https://help.openai.com/en/articles/11487775-connected-apps-in-chatgpt) |
+| Google-Kalender in ChatGPT | Für den eingerichteten Kalender **TimeTree** bestätigt | ChatGPT konnte importierte Termine im Google-Zusatzkalender lesen. Für andere Konten gelten deren Freigaben und App-Einstellungen. [OpenAI-Hilfe](https://help.openai.com/en/articles/11487775-connected-apps-in-chatgpt) |
 
 **„Vollständig kostenlos“ bezieht sich auf die Bridge innerhalb der kostenlosen Kontingente, ohne Kreditkarte, Cloud-Testguthaben, Railway oder bezahlten Server.** Ein benötigter ChatGPT-Tarif/Connector wird dadurch nicht kostenlos freigeschaltet. Falls dein kostenloses ChatGPT-Konto den Connector nicht anbietet, ist das Gesamtziel mit diesen Vorgaben nicht vollständig erreichbar.
 
 ## 2. Dateien und Verhalten
 
 ```text
-.github/workflows/sync.yml    Automatisierung; zunächst nicht aktiviert
+.github/workflows/sync.yml    Automatisierung alle zwei Stunden
 .github/workflows/verify.yml  Code-Prüfung ohne Kalenderzugang bei Änderungen
 INBETRIEBNAHME.md             Kurze Einrichtung mit Links zu diesem Repository
 sync.py                       TimeTree-Abruf, Konvertierung und Google-Abgleich
@@ -157,7 +157,7 @@ Empfohlen ist zunächst ein **privates Repository** auf GitHub Free: Code, Ausf�
 
 6. Mehrere Kalender: in `calendars` weitere Objekte mit jeweils anderer TimeTree-ID ergänzen. Dasselbe Google-Ziel ist zulässig; dann muss der erwartete Kalendername übereinstimmen. Zeitgebundene Termine verwenden die von TimeTree gelieferten IANA-Zeitzonen und ersatzweise `timezone`. Für Ganztagstermine verwendet die neue Vorlage `all_day_timezone: UTC` und ein inklusives TimeTree-Enddatum, wie [von einer Community-Integration dokumentiert](https://github.com/acdcnow/HA_timetree_import#timetree-web-api-reference). Bestehende Konfigurationen ohne `all_day_timezone` behalten die bisherige Zeitzonenwahl. Überprüfe die Anzeige an einem mehrtägigen Termin, bevor du planmäßige Läufe aktivierst.
 7. „Settings → Actions → General“: Actions aktivieren und die beiden offiziellen `actions/checkout`-/`actions/setup-python`-Actions zulassen. Der Workflow braucht nur `contents: read`. Es wird kein eigener GitHub-PAT benötigt.
-8. **Noch keine** Variable `SYNC_ENABLED=true` anlegen. Dadurch bleibt der automatische Schreibbetrieb aus.
+8. Für eine neue Einrichtung kannst du den Zeitplan über `SYNC_ENABLED=false` pausieren, bis der manuelle Abgleich geprüft ist.
 
 ## 7. Live-Prüfung vor der Automatisierung
 
@@ -179,7 +179,7 @@ Wenn besondere Serien falsch erscheinen oder die Vollständigkeit nicht nachweis
 
 ## 8. Zeitplan aktivieren und kostenlos halten
 
-1. Nach erfolgreichen Tests → Repository „Settings“ → „Secrets and variables“ → „Actions“ → **Variables** → „New repository variable“ → Name **`SYNC_ENABLED`**, Wert **`true`**.
+1. Der Zeitplan ist standardmäßig aktiv. Zum Pausieren unter Repository → „Settings“ → „Secrets and variables“ → „Actions“ → „Variables“ die Variable `SYNC_ENABLED` auf `false` setzen. Zum Fortsetzen auf `true` setzen oder die Variable entfernen.
 2. Der Workflow ist für **alle zwei Stunden zur Minute 17** eingeplant, in UTC: 00:17, 02:17 usw. In Berlin entspricht das im Winter 01:17, 03:17 usw., im Sommer 02:17, 04:17 usw. Die Ausführung kann verzögert werden; „jederzeit abfragen“ bedeutet Datenstand des letzten erfolgreichen Laufs, nicht Echtzeit.
 3. Private Repositories: Das zur Quellenprüfung ausgewiesene kostenlose Compute-Kontingent entspricht bei Standard-Linux ungefähr 2.000 Minuten. Der konfigurierte 4-Minuten-Job ist als Bremse gedacht: **12 × 31 × 4 = 1.488 Minuten** im rechnerischen Höchstfall der geplanten Jobs, zuzüglich Rundung/Runner-Nachlauf und manueller Läufe. Das ist eine Planung, keine garantierte Abrechnungsobergrenze. Auch andere Repositories/Produkte können dasselbe Kontingent verbrauchen. [Aktuelle GitHub-Abrechnung](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
 4. GitHub → Kontoeinstellungen → „Billing and licensing/Usage“ kontrollieren. Kein Zahlungsmittel hinterlegen. Ist das kostenlose Kontingent erschöpft, stoppt die Ausführung; es entsteht dadurch keine zuverlässige Dauerverfügbarkeit.
