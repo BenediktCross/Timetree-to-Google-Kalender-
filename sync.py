@@ -501,12 +501,42 @@ class Google:
                   headers={"If-Match": old["etag"]}, params={"sendUpdates": "none"}, allowed=(404, 410))
 
 
+def recurrence_entries(rules, all_day, start, zone):
+    entries = set()
+    for line in recurrence(rules, all_day, start, zone):
+        header, values = line.split(":", 1)
+        if header == "RRULE":
+            entries.add((header, ";".join(sorted(values.split(";")))))
+        else:
+            entries.update((header, value) for value in values.split(","))
+    return entries
+
+
+def same_recurrence(old, new):
+    old_rules = old.get("recurrence") or []
+    if old_rules == new["recurrence"]:
+        return True
+    all_day = "date" in new["start"]
+    field = "date" if all_day else "dateTime"
+    try:
+        zone = time_zone(new["start"].get("timeZone", "UTC"), "Google Serienzeitzone")
+        start = datetime.fromisoformat(new["start"][field])
+        if not all_day:
+            start = start.astimezone(zone)
+        return (recurrence_entries(old_rules, all_day, start, zone)
+                == recurrence_entries(new["recurrence"], all_day, start, zone))
+    except (SyncError, KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
 def content_differences(old, new):
     # Compare actual fields, not only a cached source fingerprint: user edits are corrected.
     differences = set()
-    for field in ("summary", "description", "location", "recurrence"):
-        if (old.get(field) or ([] if field == "recurrence" else "")) != new[field]:
+    for field in ("summary", "description", "location"):
+        if (old.get(field) or "") != new[field]:
             differences.add(field)
+    if not same_recurrence(old, new):
+        differences.add("recurrence")
     for field in ("start", "end"):
         a, b = old.get(field, {}), new[field]
         if "date" in b:

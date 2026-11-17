@@ -118,6 +118,17 @@ class ConversionTests(unittest.TestCase):
         old["end"].pop("timeZone")
         self.assertEqual(sync.plan(config(), "demo", d, set(), [old]), ([], [], []))
 
+    def test_google_reorders_recurrence_and_stores_exdates_in_local_time(self):
+        d = desired(recurrences=["RRULE:FREQ=WEEKLY;WKST=MO", "EXDATE:20261124T080000Z,20270406T070000Z"])
+        body = next(iter(d.values()))
+        old = mirrored(body)
+        old["recurrence"] = ["EXDATE;TZID=Europe/Berlin:20270406T090000",
+                             "EXDATE;TZID=Europe/Berlin:20261124T090000",
+                             "RRULE:WKST=MO;FREQ=WEEKLY"]
+        self.assertEqual(sync.plan(config(), "demo", d, set(), [old]), ([], [], []))
+        old["recurrence"][0] = "EXDATE;TZID=Europe/Berlin:20270406T100000"
+        self.assertEqual(len(sync.plan(config(), "demo", d, set(), [old])[1]), 1)
+
     def test_recurrence_with_date_until_and_exception(self):
         b = next(iter(desired(recurrences=["RRULE:FREQ=WEEKLY;UNTIL=20270331", "EXDATE:20261124T080000Z"]).values()))
         self.assertIn("UNTIL=20270331T215959Z", b["recurrence"][0])
