@@ -1,4 +1,4 @@
-name: TimeTree Personenzuordnung abschließen
+name: TimeTree Reparatur kontrollieren
 
 on:
   push:
@@ -35,7 +35,7 @@ jobs:
           TIMETREE_PEOPLE_BY_COLOR: ${{ secrets.TIMETREE_PEOPLE_BY_COLOR }}
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
           SYNC_CONFIG_JSON: ${{ secrets.SYNC_CONFIG_JSON }}
-          MODE: apply
+          MODE: dry-run
           EVENT_NAME: ${{ github.event_name }}
         shell: bash
         run: |
