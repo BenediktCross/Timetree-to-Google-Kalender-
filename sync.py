@@ -749,14 +749,18 @@ def main(argv=None):
     if args.apply:
         # Upserts for every calendar succeed before any deletion begins.
         applied = 0
+        total_upserts = counts[0] + counts[1]
         for target, inserts, updates, _ in plans:
             for body in inserts:
                 google.insert(target, body)
                 applied += 1
                 if applied % 100 == 0:
-                    LOG.info("Google: %d von %d neuen Terminen angelegt.", applied, counts[0])
+                    LOG.info("Google: %d von %d Terminänderungen geschrieben.", applied, total_upserts)
             for old, body in updates:
                 google.update(target, old, body)
+                applied += 1
+                if applied % 100 == 0:
+                    LOG.info("Google: %d von %d Terminänderungen geschrieben.", applied, total_upserts)
         for target, _, _, removals in plans:
             for old in removals:
                 google.delete(target, old)

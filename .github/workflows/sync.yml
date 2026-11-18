@@ -31,7 +31,9 @@ jobs:
       github.ref_name == github.event.repository.default_branch &&
       (github.event_name == 'workflow_dispatch' || vars.SYNC_ENABLED != 'false')
     runs-on: ubuntu-24.04
-    timeout-minutes: 4
+    # A full description refresh writes ~2,000 events sequentially.
+    # Four minutes interrupted the migration before it could finish.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
